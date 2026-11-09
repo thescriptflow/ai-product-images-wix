@@ -9,7 +9,8 @@
  * - `POST /credits/refund` `{ siteId, jobId }` → account plus `{ amount, alreadyRefunded }`.
  * - `POST /credits/grant` `{ siteId, purchaseId, credits }` →
  *   `{ siteId, plan, balance, lifetimeGranted, eventId, granted, alreadyApplied }`.
- *   `purchaseId` is the Wix invoice id. The same purchase id and credit count
+ *   `purchaseId` is the Wix invoice id when purchase history includes one.
+ *   Otherwise it is the product id and purchase time. The same purchase id and credit count
  *   returns `alreadyApplied: true` and the current balance. A different credit
  *   count for that purchase id is `409`.
  * Errors are JSON `{ code }`:

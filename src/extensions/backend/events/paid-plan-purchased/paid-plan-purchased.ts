@@ -7,6 +7,7 @@ export default appInstances.onAppInstancePaidPlanPurchased(async (event) => {
       cycle: event.data.cycle,
       vendorProductId: event.data.vendorProductId,
       invoiceId: event.data.invoiceId,
+      operationTimeStamp: event.data.operationTimeStamp,
       eventSiteId: event.metadata.accountInfo?.siteId,
     });
   } catch (error) {

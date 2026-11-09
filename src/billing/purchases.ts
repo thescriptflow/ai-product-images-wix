@@ -6,8 +6,6 @@ import { packByProductId, type CreditPack } from './packs';
 
 export const APP_ID = 'daa76557-f2cc-4d12-8993-97f3a766f87a';
 
-const MATCH_WINDOW_MS = 120_000;
-
 function isOneTime(cycle: string | null | undefined): boolean {
   return cycle === 'ONE_TIME';
 }
@@ -25,6 +23,7 @@ async function siteFromInstance() {
   return {
     siteId: response.site?.siteId?.trim() ?? '',
     instanceId: response.instance?.instanceId?.trim() ?? '',
+    isFree: response.instance?.isFree,
     billing: response.instance?.billing,
   };
 }
@@ -34,75 +33,120 @@ async function purchaseHistory() {
   return elevated();
 }
 
-function confirmedOneTime(purchases: { productId?: string; billingCycle?: string | null }[] | undefined, productId: string): boolean {
-  return (purchases ?? []).some((purchase) => purchase.productId === productId && isOneTime(purchase.billingCycle));
-}
-
 /**
- * Get Purchase History has no invoice id. The current app instance invoice is the
- * only purchase id available outside the webhook, so this grants that latest
- * one-time invoice when it matches a configured pack.
+ * Get Purchase History does not include an invoice id. Dashboard loads still grant
+ * each confirmed one-time pack from that list when the app instance still looks
+ * free. `purchaseId` is the invoice id when a history row has one. Otherwise it
+ * is the product id plus the purchase time, the only stable id that list returns.
+ * A later paid-plan event uses that same id, so the purchase is not granted twice.
  */
-function packForCurrentInvoice(
-  purchases: { productId?: string; billingCycle?: string | null; dateCreated?: Date | null }[],
-  billingInfo: { timeStamp?: string | null; packageName?: string | null } | undefined,
-  env: NodeJS.ProcessEnv,
-): CreditPack | undefined {
-  const known = purchases.flatMap((purchase) => {
-    if (!isOneTime(purchase.billingCycle) || !purchase.productId) return [];
-    const pack = packByProductId(purchase.productId, env);
-    return pack ? [{ purchase, pack }] : [];
-  });
-  if (known.length === 0) return undefined;
-  const stamp = toMillis(billingInfo?.timeStamp);
-  if (stamp !== undefined) {
-    let best: { pack: CreditPack; delta: number } | undefined;
-    for (const item of known) {
-      const ms = toMillis(item.purchase.dateCreated);
-      if (ms === undefined) continue;
-      const delta = Math.abs(ms - stamp);
-      if (delta <= MATCH_WINDOW_MS && (!best || delta < best.delta)) best = { pack: item.pack, delta };
-    }
-    if (best) return best.pack;
-  }
-  const packageName = billingInfo?.packageName?.trim();
-  if (packageName) {
-    const named = known.filter((item) => item.pack.name === packageName);
-    const latest = named.reduce<(typeof named)[number] | undefined>((best, item) => {
-      if (!best) return item;
-      return (toMillis(item.purchase.dateCreated) ?? 0) >= (toMillis(best.purchase.dateCreated) ?? 0) ? item : best;
-    }, undefined);
-    if (latest) return latest.pack;
-  }
-  if (known.length === 1) return known[0]?.pack;
-  return undefined;
+function purchaseInvoiceId(purchase: { invoiceId?: string | null }): string | undefined {
+  const invoiceId = purchase.invoiceId?.trim();
+  return invoiceId || undefined;
 }
 
-async function grantPurchase(siteId: string, pack: CreditPack, invoiceId: string): Promise<void> {
+function canonicalInstant(value: Date | string | null | undefined): string | undefined {
+  const ms = toMillis(value);
+  return ms === undefined ? undefined : new Date(ms).toISOString();
+}
+
+function purchaseKey(purchase: {
+  productId?: string | null;
+  dateCreated?: Date | string | null;
+  invoiceId?: string | null;
+}): string | undefined {
+  const invoiceId = purchaseInvoiceId(purchase);
+  if (invoiceId) return invoiceId;
+  const productId = purchase.productId?.trim();
+  const created = canonicalInstant(purchase.dateCreated);
+  if (!productId || !created) return undefined;
+  return `${productId}:${created}`;
+}
+
+function describePurchase(purchase: {
+  productId?: string | null;
+  billingCycle?: string | null;
+  dateCreated?: Date | string | null;
+}): string {
+  const productId = purchase.productId?.trim() || 'unknown';
+  const cycle = purchase.billingCycle?.trim() || 'unknown';
+  const created = canonicalInstant(purchase.dateCreated) ?? 'unknown';
+  return `product ${productId} cycle ${cycle} purchased ${created}`;
+}
+
+function skipPurchase(
+  purchase: { productId?: string | null; billingCycle?: string | null; dateCreated?: Date | string | null },
+  reason: string,
+): void {
+  console.error(`Credit purchase skipped: ${describePurchase(purchase)}: ${reason}`);
+}
+
+async function grantPurchase(siteId: string, pack: CreditPack, purchaseId: string, detail: string): Promise<void> {
   try {
-    await grantCredits(siteId, pack.credits, invoiceId, readEnv());
+    console.error(`Granting ${pack.credits} credits for ${detail}. purchaseId=${purchaseId}`);
+    await grantCredits(siteId, pack.credits, purchaseId, readEnv());
   } catch (error) {
     if (error instanceof CreditGrantConflictError) {
-      console.error('Credit grant conflict for invoice', invoiceId);
+      console.error(`Credit grant conflict for purchaseId ${purchaseId}`);
       return;
     }
     throw error;
   }
 }
 
+type HistoryPurchase = {
+  productId?: string | null;
+  billingCycle?: string | null;
+  dateCreated?: Date | string | null;
+  invoiceId?: string | null;
+};
+
+function matchingPurchase(purchases: HistoryPurchase[], productId: string, when: Date | string | null | undefined): HistoryPurchase | undefined {
+  const rows = purchases.filter((purchase) => purchase.productId === productId && isOneTime(purchase.billingCycle));
+  const target = toMillis(when);
+  if (target === undefined) return rows[rows.length - 1];
+  let best: HistoryPurchase | undefined;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const purchase of rows) {
+    const created = toMillis(purchase.dateCreated);
+    if (created === undefined) continue;
+    const distance = Math.abs(created - target);
+    if (distance < bestDistance) {
+      best = purchase;
+      bestDistance = distance;
+    }
+  }
+  return best ?? rows[rows.length - 1];
+}
+
+function grantDetail(purchase: HistoryPurchase): string {
+  return purchaseInvoiceId(purchase)
+    ? `${describePurchase(purchase)} (invoice id from purchase history)`
+    : `${describePurchase(purchase)} (Get Purchase History has no invoice id; purchaseId is the product id and purchase time)`;
+}
+
 export async function grantPaidPlan(input: {
   cycle: string | null | undefined;
   vendorProductId: string | null | undefined;
   invoiceId: string | null | undefined;
+  operationTimeStamp?: Date | string | null;
   eventSiteId: string | null | undefined;
 }): Promise<void> {
-  if (!isOneTime(input.cycle)) return;
   const productId = input.vendorProductId?.trim() ?? '';
+  if (!isOneTime(input.cycle)) {
+    console.error(
+      `Credit purchase skipped: product ${productId || 'unknown'} cycle ${input.cycle || 'unknown'}: not a one-time pack.`,
+    );
+    return;
+  }
   const env = readEnv();
   const pack = productId ? packByProductId(productId, env) : undefined;
-  if (!pack) return;
-  const invoiceId = input.invoiceId?.trim() ?? '';
-  if (!invoiceId) throw new Error('Paid plan event had no invoice id.');
+  if (!pack) {
+    console.error(
+      `Credit purchase skipped: product ${productId || 'unknown'} cycle ${input.cycle || 'unknown'}: no credit pack is configured for this product.`,
+    );
+    return;
+  }
 
   const installed = await siteFromInstance();
   const eventSiteId = input.eventSiteId?.trim() ?? '';
@@ -113,10 +157,24 @@ export async function grantPaidPlan(input: {
   if (!siteId) throw new Error('Could not identify the site for this purchase.');
 
   const history = await purchaseHistory();
-  if (!confirmedOneTime(history.purchases, productId)) {
+  const purchase = matchingPurchase(history.purchases ?? [], productId, input.operationTimeStamp);
+  if (!purchase) {
     throw new Error('This purchase is not in the Wix purchase history yet.');
   }
-  await grantPurchase(siteId, pack, invoiceId);
+  const purchaseId = purchaseKey(purchase);
+  if (!purchaseId) {
+    skipPurchase(purchase, 'purchase history has no invoice id and no purchase time.');
+    return;
+  }
+  const eventInvoiceId = input.invoiceId?.trim() ?? '';
+  if (!eventInvoiceId) {
+    console.error(`Paid plan event for ${describePurchase(purchase)} has no invoice id. Granting with purchaseId ${purchaseId}.`);
+  } else if (eventInvoiceId !== purchaseId) {
+    console.error(
+      `Paid plan invoice ${eventInvoiceId} is not on the purchase history row. Granting with purchaseId ${purchaseId} so the dashboard grant stays idempotent.`,
+    );
+  }
+  await grantPurchase(siteId, pack, purchaseId, grantDetail(purchase));
 }
 
 export async function reconcileLatestPurchase(siteId: string): Promise<void> {
@@ -126,15 +184,37 @@ export async function reconcileLatestPurchase(siteId: string): Promise<void> {
     console.error('Refusing to grant credits because the installation site does not match the caller.');
     return;
   }
-  const billingInfo = installed.billing;
-  const invoiceId = billingInfo?.invoiceId?.trim() ?? '';
-  if (!invoiceId || !isOneTime(billingInfo?.billingCycle)) return;
-  const pack = packForCurrentInvoice(history.purchases ?? [], billingInfo, env);
-  if (!pack) {
-    console.error('Could not match the current one-time invoice to a credit pack.');
+  const purchases = history.purchases ?? [];
+  const cycle = installed.billing?.billingCycle ?? 'none';
+  const instanceInvoice = installed.billing?.invoiceId?.trim() || 'absent';
+  const free = installed.isFree === undefined ? 'unknown' : String(installed.isFree);
+  console.error(
+    `Reconciling credit purchases from Wix history (${purchases.length}). App instance isFree=${free}, billingCycle=${cycle}, invoiceId=${instanceInvoice}.`,
+  );
+  if (purchases.length === 0) {
+    console.error('Credit purchase skipped: purchase history is empty.');
     return;
   }
-  await grantPurchase(siteId, pack, invoiceId);
+  const granted = new Set<string>();
+  for (const purchase of purchases) {
+    if (!isOneTime(purchase.billingCycle)) {
+      skipPurchase(purchase, 'not a one-time pack.');
+      continue;
+    }
+    const pack = purchase.productId ? packByProductId(purchase.productId, env) : undefined;
+    if (!pack) {
+      skipPurchase(purchase, 'no credit pack is configured for this product.');
+      continue;
+    }
+    const purchaseId = purchaseKey(purchase);
+    if (!purchaseId) {
+      skipPurchase(purchase, 'purchase history has no invoice id and no purchase time.');
+      continue;
+    }
+    if (granted.has(purchaseId)) continue;
+    granted.add(purchaseId);
+    await grantPurchase(siteId, pack, purchaseId, grantDetail(purchase));
+  }
 }
 
 export function useTestCheckout(env: NodeJS.ProcessEnv): boolean {
