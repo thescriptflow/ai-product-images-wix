@@ -259,7 +259,7 @@ export async function processImage(
 
   let reserved = false;
   try {
-    const remaining = await reserveCredits(siteId, cost, request.jobId, env);
+    const remaining = await reserveCredits(siteId, cost, request.jobId, request.action, env);
     reserved = true;
     const result = await processWithFal(request, env);
     if (result.kind === 'pending') {

@@ -107,8 +107,8 @@ npx wix env pull
 | `IMAGE_PROVIDER` | `mock` (default), `fal`, `replicate`, or `photoroom` |
 | `FAL_KEY` or `FAL_API_KEY` | fal. Required when `IMAGE_PROVIDER=fal`. Server only. |
 | `FAL_SCENE_MODEL` | Optional. Empty uses `fal-ai/flux-pro/kontext`. Set `fal-ai/flux-kontext/dev` for the cheaper scene model. |
-| `CREDITS_API_URL` | Base URL of the credits service. Server only. |
-| `CREDITS_API_KEY` | `x-api-key` for the credits service. Server only. |
+| `CREDITS_API_URL` | Base URL of the credits service. The app calls `/credits/:siteId`, `/credits/reserve`, and `/credits/refund`. Server only. |
+| `CREDITS_API_KEY` | `x-api-key` for every credits path except `/health`. Server only. |
 | `REPLICATE_API_TOKEN` | Replicate (preview only in this build) |
 | `PHOTOROOM_API_KEY` | Photoroom (preview only in this build) |
 

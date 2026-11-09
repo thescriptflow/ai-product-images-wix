@@ -1,24 +1,32 @@
 /**
  * Server-only client for the credits service.
  *
- * Contract (adjust the three paths or `readRemaining` if the service PR lands
- * a different shape):
- * - Header `x-api-key`: `CREDITS_API_KEY`
- * - `GET {CREDITS_API_URL}/balance?siteId=` → `{ remaining: number }`
- * - `POST {CREDITS_API_URL}/reserve` `{ siteId, cost, jobId }` → `{ remaining }`
- *   Idempotent by `jobId`. `402` means the site is out of credits.
- * - `POST {CREDITS_API_URL}/refund` `{ siteId, jobId }` once per job. The
- *   service looks up the amount from the stored reserve.
- * `creditsRemaining` is accepted as an alias of `remaining`.
+ * Every path except `/health` sends `x-api-key: CREDITS_API_KEY`.
+ * - `GET {CREDITS_API_URL}/credits/:siteId` → `{ siteId, plan, balance, lifetimeGranted }`
+ * - `POST /credits/reserve` `{ siteId, jobId, cost, action }` → account plus
+ *   `{ jobId, cost, action, alreadyReserved }`. A retry must send the same
+ *   siteId, jobId, and cost. `action` is `remove_bg | replace_bg | ai_scene | publish`.
+ * - `POST /credits/refund` `{ siteId, jobId }` → account plus `{ amount, alreadyRefunded }`.
+ * Errors are JSON `{ code }`:
+ * - `402 insufficient_credits` → the existing no-credits message
+ * - `404 unknown_job` on refund → nothing to refund
+ * - `409 conflict`, `401`, `429`, and `5xx` → friendly failure, and the paid job does not run
+ * The UI balance is `balance`.
  */
 
-const BALANCE_PATH = '/balance';
-const RESERVE_PATH = '/reserve';
-const REFUND_PATH = '/refund';
+import type { ImageAction } from './contract';
+
 const REQUEST_TIMEOUT_MS = 8_000;
 
 const NO_CREDITS_MESSAGE = 'No image credits remaining. Upgrade your plan to continue.';
 const UNAVAILABLE_MESSAGE = 'Image credits are unavailable right now. Please try again shortly.';
+
+const CREDIT_ACTION: Record<ImageAction, 'remove_bg' | 'replace_bg' | 'ai_scene' | 'publish'> = {
+  'remove-background': 'remove_bg',
+  'replace-background': 'replace_bg',
+  'ai-scene': 'ai_scene',
+  publish: 'publish',
+};
 
 export class NoCreditsError extends Error {
   constructor() {
@@ -39,6 +47,11 @@ interface CreditsConfig {
   apiKey: string;
 }
 
+interface CreditsFailure {
+  status: number;
+  code?: string;
+}
+
 function requireConfig(env: NodeJS.ProcessEnv): CreditsConfig {
   const baseUrl = env.CREDITS_API_URL?.trim().replace(/\/$/, '') ?? '';
   const apiKey = env.CREDITS_API_KEY?.trim() ?? '';
@@ -49,10 +62,12 @@ function requireConfig(env: NodeJS.ProcessEnv): CreditsConfig {
   return { baseUrl, apiKey };
 }
 
-function readRemaining(value: unknown): number | undefined {
+function readBalance(value: unknown): number | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const record = value as Record<string, unknown>;
-  const raw = record.remaining ?? record.creditsRemaining;
+  const account = record.account;
+  const source = account && typeof account === 'object' ? (account as Record<string, unknown>) : record;
+  const raw = 'balance' in record && typeof record.balance === 'number' ? record.balance : source.balance;
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : undefined;
 }
 
@@ -78,22 +93,34 @@ async function creditsFetch(
   }
 }
 
+async function readFailure(response: Response): Promise<CreditsFailure> {
+  let code: string | undefined;
+  try {
+    const body: unknown = await response.json();
+    if (body && typeof body === 'object' && 'code' in body && typeof body.code === 'string') {
+      code = body.code;
+    }
+  } catch (error) {
+    console.error('Credits API error body was not JSON', response.status, error);
+  }
+  return { status: response.status, code };
+}
+
+function throwForFailure(where: string, failure: CreditsFailure): never {
+  console.error('Credits API failed', where, failure.status, failure.code ?? '');
+  if (failure.status === 402 || failure.code === 'insufficient_credits') throw new NoCreditsError();
+  throw new CreditsUnavailableError();
+}
+
 export async function getBalance(
   siteId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<{ remaining: number }> {
-  const response = await creditsFetch(
-    env,
-    `${BALANCE_PATH}?siteId=${encodeURIComponent(siteId)}`,
-    { method: 'GET' },
-  );
-  if (!response.ok) {
-    console.error('Credits balance failed', response.status);
-    throw new CreditsUnavailableError();
-  }
-  const remaining = readRemaining(await response.json().catch(() => undefined));
+  const response = await creditsFetch(env, `/credits/${encodeURIComponent(siteId)}`, { method: 'GET' });
+  if (!response.ok) throwForFailure('balance', await readFailure(response));
+  const remaining = readBalance(await response.json().catch(() => undefined));
   if (remaining === undefined) {
-    console.error('Credits balance response had no remaining count');
+    console.error('Credits balance response had no balance');
     throw new CreditsUnavailableError();
   }
   return { remaining: Math.max(0, remaining) };
@@ -103,20 +130,18 @@ export async function reserveCredits(
   siteId: string,
   cost: number,
   jobId: string,
+  action: ImageAction,
   env: NodeJS.ProcessEnv,
 ): Promise<number> {
-  const response = await creditsFetch(env, RESERVE_PATH, {
+  const response = await creditsFetch(env, '/credits/reserve', {
     method: 'POST',
-    body: JSON.stringify({ siteId, cost, jobId }),
+    body: JSON.stringify({ siteId, jobId, cost, action: CREDIT_ACTION[action] }),
   });
-  if (response.status === 402) throw new NoCreditsError();
-  if (!response.ok) {
-    console.error('Credits reserve failed', response.status);
-    throw new CreditsUnavailableError();
-  }
-  const remaining = readRemaining(await response.json().catch(() => undefined));
+  if (!response.ok) throwForFailure('reserve', await readFailure(response));
+  const body: unknown = await response.json().catch(() => undefined);
+  const remaining = readBalance(body);
   if (remaining === undefined) {
-    console.error('Credits reserve response had no remaining count');
+    console.error('Credits reserve response had no balance');
     try {
       await refundCredits(siteId, jobId, env);
     } catch (error) {
@@ -132,12 +157,12 @@ export async function refundCredits(
   jobId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<void> {
-  const response = await creditsFetch(env, REFUND_PATH, {
+  const response = await creditsFetch(env, '/credits/refund', {
     method: 'POST',
     body: JSON.stringify({ siteId, jobId }),
   });
-  if (response.ok || response.status === 409) return;
-  const text = await response.text().catch(() => '');
-  console.error('Credits refund failed', response.status, text.slice(0, 300));
-  throw new Error('Credit refund failed');
+  if (response.ok) return;
+  const failure = await readFailure(response);
+  if (failure.status === 404 && failure.code === 'unknown_job') return;
+  throwForFailure('refund', failure);
 }
