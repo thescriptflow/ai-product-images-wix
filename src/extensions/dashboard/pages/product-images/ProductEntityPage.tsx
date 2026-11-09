@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Box, Card, Dropdown, FormField, Input, InputArea } from '@wix/design-system';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Box, Button, Card, Dropdown, FormField, Input, InputArea } from '@wix/design-system';
 import { EntityPage, useEntityPage, useEntityPageContext } from '@wix/patterns';
 import { useController, useForm } from '@wix/patterns/form';
 import { fetchBilling } from './billing-client';
@@ -20,6 +20,7 @@ const VISIBILITY_OPTIONS: { id: ProductVisibility; value: string }[] = [
 ];
 
 export const ProductEntityPage = () => {
+  const navigate = useNavigate();
   const { id } = useParams<{ id?: string }>();
   const form = useForm<ProductFormFields>();
   const [creditsLabel, setCreditsLabel] = useState('Credits …');
@@ -79,6 +80,11 @@ export const ProductEntityPage = () => {
       />
       <EntityPage.Content>
         <EntityPage.MainContent>
+          <Box align="right">
+            <Button skin="standard" size="medium" onClick={() => navigate('/credits')}>
+              Buy credits
+            </Button>
+          </Box>
           <EntityPage.Card>
             <Card.Header title="Details" />
             <Card.Divider />

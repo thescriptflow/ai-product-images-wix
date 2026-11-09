@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, Button, Card, Input, Text, TextButton } from '@wix/design-system';
+import { Box, Button, Card, Input, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import { EntityPage, useEntityPageContext } from '@wix/patterns';
 import type { ImageAction, ProcessImageResponse } from '../../../../image-processing/contract';
@@ -201,7 +201,14 @@ export const ProductStudio = ({
 
   return (
     <EntityPage.Card>
-      <Card.Header title="Photo studio" />
+      <Card.Header
+        title="Photo studio"
+        suffix={
+          <Button skin="standard" size="small" onClick={() => navigate('/credits')}>
+            Buy credits
+          </Button>
+        }
+      />
       <Card.Divider />
       <Card.Content>
         <Box direction="vertical" gap="SP5">
@@ -250,7 +257,6 @@ export const ProductStudio = ({
           </Section>
 
           <Section title="2. Edit this photo" hint="Remove and Replace background use 1 credit each, AI scene uses 2. When the balance runs out, buy more credits.">
-            <TextButton onClick={() => navigate('/credits')}>Buy credits</TextButton>
             <Box direction="vertical" gap="SP4">
               <Section title="Remove background" hint="Gives a cut-out of the product with a transparent background.">
                 <Button

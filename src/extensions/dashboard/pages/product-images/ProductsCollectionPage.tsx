@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Badge, Image, Text } from '@wix/design-system';
+import { Badge, Box, Button, Image, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import {
   CollectionEmptyState,
@@ -9,6 +9,7 @@ import {
   CollectionSearch,
   CollectionToolbarFilters,
   MultiBulkActionToolbar,
+  PrimaryActionButton,
   PrimaryActions,
   MultiSelectCheckboxFilter,
   Table,
@@ -19,7 +20,8 @@ import {
 } from '@wix/patterns';
 import { CollectionPage } from '@wix/patterns/page';
 import { usePatternsNavigate } from '@wix/patterns/router';
-import { CreditCard, Sparkles } from '@wix/wix-ui-icons-common/lazy';
+import { CreditCard } from '@wix/wix-ui-icons-common';
+import { Sparkles } from '@wix/wix-ui-icons-common/lazy';
 import { fetchBilling } from './billing-client';
 import { defaultPrompt, fetchCredits, processProductImage } from './image-client';
 import {
@@ -152,9 +154,19 @@ export const ProductsCollectionPage = () => {
         }}
       />
       <CollectionPage.Content>
+        <Box align="right" paddingBottom="SP3">
+          <Button skin="standard" size="medium" prefixIcon={<CreditCard />} onClick={() => navigate('/credits')}>
+            Buy credits
+          </Button>
+        </Box>
         <Table
           state={state}
           horizontalScroll
+          primaryActionButton={
+            <PrimaryActionButton prefixIcon={<CreditCard />} onClick={() => navigate('/credits')}>
+              Buy credits
+            </PrimaryActionButton>
+          }
           search={<CollectionSearch placeholder="Search by product name" />}
           filters={
             <CollectionToolbarFilters>
