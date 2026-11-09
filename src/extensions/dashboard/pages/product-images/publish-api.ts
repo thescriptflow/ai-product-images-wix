@@ -111,8 +111,108 @@ async function publishV3(productId: string, fileId: string, altText: string): Pr
   await productsV3.updateProduct(productId, update as unknown as productsV3.UpdateProduct);
 }
 
-async function publishV1(productId: string, fileId: string): Promise<void> {
-  await products.addProductMedia(productId, [{ mediaId: fileId }] as never);
+const MAX_MEDIA_BATCH = 50;
+
+function v1MediaIds(product: products.Product | undefined): string[] {
+  return (product?.media?.items ?? []).flatMap((item) => (item._id ? [item._id] : []));
+}
+
+function v1MainId(product: products.Product | undefined): string | undefined {
+  return product?.media?.mainMedia?._id ?? product?.media?.items?.[0]?._id;
+}
+
+interface ChoiceLink {
+  option: string;
+  choice: string;
+  mediaIds: string[];
+}
+
+function v1ChoiceLinks(product: products.Product | undefined): ChoiceLink[] {
+  const links: ChoiceLink[] = [];
+  for (const option of product?.productOptions ?? []) {
+    if (!option.name) continue;
+    for (const choice of option.choices ?? []) {
+      const ids = (choice.media?.items ?? []).flatMap((item) => (item._id ? [item._id] : []));
+      if (choice.value && ids.length > 0) links.push({ option: option.name, choice: choice.value, mediaIds: ids });
+    }
+  }
+  return links;
+}
+
+function batchesOf(ids: string[]): string[][] {
+  const batches: string[][] = [];
+  for (let index = 0; index < ids.length; index += MAX_MEDIA_BATCH) {
+    batches.push(ids.slice(index, index + MAX_MEDIA_BATCH));
+  }
+  return batches;
+}
+
+/**
+ * Catalog V1 Update Product marks `media` read-only. The main image is the
+ * primary media item, so the new file is added, the previous items are removed
+ * (leaving the new file as the only, and therefore main, image), then the
+ * previous items are added back after it.
+ */
+async function publishV1(productId: string, fileId: string): Promise<'main-photo' | 'gallery-only'> {
+  const before = await products.getProduct(productId);
+  const beforeIds = new Set(v1MediaIds(before.product));
+  const links = v1ChoiceLinks(before.product);
+  await products.addProductMedia(productId, [{ mediaId: fileId }]);
+
+  let current = await products.getProduct(productId);
+  let currentIds = v1MediaIds(current.product);
+  let added = currentIds.filter((id) => !beforeIds.has(id));
+  if (added.length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    current = await products.getProduct(productId);
+    currentIds = v1MediaIds(current.product);
+    added = currentIds.filter((id) => !beforeIds.has(id));
+  }
+  const newId = added.find((id) => id === fileId || id.includes(fileId)) ?? added[0];
+  if (!newId) return 'gallery-only';
+  const previous = currentIds.filter((id) => id !== newId);
+  if (previous.length === 0 || v1MainId(current.product) === newId) return 'main-photo';
+
+  try {
+    for (const batch of batchesOf(previous)) {
+      await products.removeProductMedia(productId, batch);
+    }
+  } catch (error) {
+    console.error('Could not reorder classic catalog media', error);
+    return 'gallery-only';
+  }
+
+  try {
+    for (const batch of batchesOf(previous)) {
+      const media = batch.map((mediaId) => ({ mediaId }));
+      try {
+        await products.addProductMedia(productId, media);
+      } catch (error) {
+        console.error('Retrying classic catalog media restore', error);
+        await products.addProductMedia(productId, media);
+      }
+    }
+  } catch (error) {
+    console.error('Could not put the previous photos back', error);
+    throw new Error(
+      'The new photo is on the product, but some previous photos could not be put back. They are still in Media Manager.',
+    );
+  }
+
+  const optionNames = new Set(links.map((link) => link.option));
+  if (optionNames.size === 1) {
+    try {
+      await products.addProductMediaToChoices(
+        productId,
+        links.map((link) => ({ option: link.option, choice: link.choice, mediaIds: link.mediaIds })),
+      );
+    } catch (error) {
+      console.error('Could not restore choice photos on the classic catalog', error);
+    }
+  }
+
+  const finalProduct = await products.getProduct(productId);
+  return v1MainId(finalProduct.product) === newId ? 'main-photo' : 'gallery-only';
 }
 
 export async function publishProductImage(input: PublishInput): Promise<PublishResult> {
@@ -136,10 +236,17 @@ export async function publishProductImage(input: PublishInput): Promise<PublishR
       message: 'Published. The new photo is now the main image and the original is still in the gallery. Reload the page to see it.',
     };
   }
-  await publishV1(input.productId, fileId);
+  const mode = await publishV1(input.productId, fileId);
+  if (mode === 'main-photo') {
+    return {
+      fileId,
+      mode,
+      message: 'Published. The new photo is now the main image and the original photos are still in the gallery. Reload the page to see it.',
+    };
+  }
   return {
     fileId,
-    mode: 'gallery-only',
-    message: 'Added to the product gallery. On classic (V1) stores please set it as the main photo in Products.',
+    mode,
+    message: 'Added to the product gallery. Your original photos were kept, but this classic catalog did not make the new photo the main one. Set it as the main photo in Products.',
   };
 }

@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Box, Button, Card, Input, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import { EntityPage, useEntityPageContext } from '@wix/patterns';
 import type { ImageAction, ProcessImageResponse } from '../../../../image-processing/contract';
-import { processProductImage } from './image-client';
+import { fetchCredits, processProductImage } from './image-client';
 import { publishProductImage } from './publish-api';
 import { fetchProductPhotos, type ProductPhoto } from './media-api';
 import type { CatalogProduct, ProductVisibility } from './products-api';
@@ -76,6 +76,7 @@ export const ProductStudio = ({
   const [bgColor, setBgColor] = useState('#FFFFFF');
   const [pending, setPending] = useState<ImageAction | undefined>();
   const [result, setResult] = useState<ProcessImageResponse | undefined>();
+  const busyRef = useRef(false);
 
   const loadPhotos = useCallback(async () => {
     setPhotos(await fetchProductPhotos(productId));
@@ -95,6 +96,24 @@ export const ProductStudio = ({
     });
   };
 
+  const refreshCredits = () => {
+    void fetchCredits()
+      .then((credits) => onCreditsChange(credits.creditsRemaining))
+      .catch((error: unknown) => console.error('Could not refresh credits', error));
+  };
+
+  const begin = (action: ImageAction): boolean => {
+    if (busyRef.current) return false;
+    busyRef.current = true;
+    setPending(action);
+    return true;
+  };
+
+  const finish = () => {
+    busyRef.current = false;
+    setPending(undefined);
+  };
+
   const call = async (action: ImageAction, prompt?: string) => {
     if (!product || !source) throw new Error('This product has no photo to edit.');
     return processProductImage({
@@ -107,16 +126,17 @@ export const ProductStudio = ({
   };
 
   const removeBackground = async () => {
-    setPending('remove-background');
+    if (!begin('remove-background')) return;
     try {
       const response = await call('remove-background');
       setResult(response);
-      onCreditsChange(response.creditsRemaining);
+      if (typeof response.creditsRemaining === 'number') onCreditsChange(response.creditsRemaining);
       dashboard.showToast({ message: response.message, type: 'success' });
     } catch (error) {
       showError(error, 'Remove background failed');
+      refreshCredits();
     } finally {
-      setPending(undefined);
+      finish();
     }
   };
 
@@ -125,37 +145,39 @@ export const ProductStudio = ({
       dashboard.showToast({ message: 'Enter a colour like #FFFFFF.', type: 'error' });
       return;
     }
-    setPending('replace-background');
+    if (!begin('replace-background')) return;
     try {
       const response = await call('replace-background', bgColor);
       const finalImage = await compositeOnColor(response.resultUrl, bgColor);
       setResult({ ...response, resultUrl: finalImage, message: `Background replaced with ${bgColor}.` });
-      onCreditsChange(response.creditsRemaining);
+      if (typeof response.creditsRemaining === 'number') onCreditsChange(response.creditsRemaining);
       dashboard.showToast({ message: `Background replaced with ${bgColor}.`, type: 'success' });
     } catch (error) {
       showError(error, 'Replace background failed');
+      refreshCredits();
     } finally {
-      setPending(undefined);
+      finish();
     }
   };
 
   const aiScene = async () => {
-    setPending('ai-scene');
+    if (!begin('ai-scene')) return;
     try {
       const response = await call('ai-scene', aiPrompt.trim());
       setResult(response);
-      onCreditsChange(response.creditsRemaining);
+      if (typeof response.creditsRemaining === 'number') onCreditsChange(response.creditsRemaining);
       dashboard.showToast({ message: response.message, type: 'success' });
     } catch (error) {
       showError(error, 'AI scene failed');
+      refreshCredits();
     } finally {
-      setPending(undefined);
+      finish();
     }
   };
 
   const publish = async () => {
     if (!product || !result) return;
-    setPending('publish');
+    if (!begin('publish')) return;
     try {
       const outcome = await publishProductImage({
         productId,
@@ -167,7 +189,7 @@ export const ProductStudio = ({
     } catch (error) {
       showError(error, 'Publish failed');
     } finally {
-      setPending(undefined);
+      finish();
     }
   };
 

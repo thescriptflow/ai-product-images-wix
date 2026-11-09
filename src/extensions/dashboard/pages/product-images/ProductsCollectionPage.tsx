@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Badge, Image, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import {
@@ -40,6 +40,7 @@ export const ProductsCollectionPage = () => {
   const { navigateToEntityPage } = usePatternsNavigate<CatalogProduct>();
   const { errorHandler } = useWixPatternsContainer();
   const [creditsLabel, setCreditsLabel] = useState('Credits …');
+  const batchRef = useRef(false);
 
   useEffect(() => {
     let active = true;
@@ -84,6 +85,8 @@ export const ProductsCollectionPage = () => {
       });
       return;
     }
+    if (batchRef.current) return;
+    batchRef.current = true;
     let lastCredits = creditsLabel;
     try {
       for (const product of withPhotos) {
@@ -94,7 +97,7 @@ export const ProductsCollectionPage = () => {
           ...(product.imageUrl ? { imageUrl: product.imageUrl } : {}),
           prompt: defaultPrompt('ai-scene'),
         });
-        lastCredits = `${result.creditsRemaining} credits`;
+        if (typeof result.creditsRemaining === 'number') lastCredits = `${result.creditsRemaining} credits`;
       }
       setCreditsLabel(lastCredits);
       dashboard.showToast({
@@ -107,6 +110,14 @@ export const ProductsCollectionPage = () => {
         message: error instanceof Error ? error.message : 'Batch AI scene failed',
         type: 'error',
       });
+      try {
+        const credits = await fetchCredits();
+        setCreditsLabel(`${credits.creditsRemaining} credits`);
+      } catch (refreshError) {
+        console.error('Could not refresh credits', refreshError);
+      }
+    } finally {
+      batchRef.current = false;
     }
   };
 

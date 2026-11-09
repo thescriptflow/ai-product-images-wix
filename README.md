@@ -1,6 +1,6 @@
 # AI Product Images
 
-Dashboard app for Wix Stores merchants. It lists catalog products, opens a product editor, and previews AI photo actions: background removal, background replacement, lifestyle scenes, before/after compare, and batch apply. Publishing a generated photo to the store, real model calls, and credit billing are stubbed.
+Dashboard app for Wix Stores merchants. It lists catalog products, opens a product editor, and runs AI photo actions: background removal, background replacement, lifestyle scenes, before/after compare, and batch apply. With `IMAGE_PROVIDER=fal` the backend calls fal.ai. Credits are stored in a separate credits service, keyed by the Wix site id.
 
 The project uses the current [Wix CLI](https://dev.wix.com/docs/wix-cli/guides/about-the-wix-cli) app layout: React, TypeScript, Astro, and `@wix/design-system`. It was started from the official blank app template (`astro-app-template` in [wix/cli-app-templates](https://github.com/wix/cli-app-templates)). `npm create @wix/new app` and `wix generate` both require a logged-in Wix account, so the dashboard page and HTTP endpoint were written to match the CLI templates shipped with `@wix/cli` 1.2.8.
 
@@ -11,9 +11,9 @@ The project uses the current [Wix CLI](https://dev.wix.com/docs/wix-cli/guides/a
 - Product editor that saves name, visibility, and description through the matching catalog API.
 - Photo studio actions: **Remove background**, **Replace background**, **AI scene**, **Publish**, plus a before/after preview.
 - Batch **AI scene** on the products you select in the table.
-- Credits badge. The balance starts at 40 and lives in the dev server process. It resets when the process restarts.
+- Credits badge. The balance is read from the credits service for the current Wix site. Remove background and replace background cost 1 credit, AI scene costs 2, and publish costs 0. The mock provider does not charge.
 - HTTP endpoint `POST /api/image-processing` and `GET /api/image-processing`.
-- Provider interface for `mock` (default), `fal`, `replicate`, and `photoroom`. Keys are read from the environment. No vendor request is sent.
+- Provider interface for `mock` (default), `fal`, `replicate`, and `photoroom`. `fal` calls Bria background removal and FLUX Kontext. The other providers still return a preview.
 
 ## Prerequisites
 
@@ -102,14 +102,17 @@ npx wix env set --key IMAGE_PROVIDER --value mock
 npx wix env pull
 ```
 
-| Variable | Provider |
+| Variable | Purpose |
 | --- | --- |
 | `IMAGE_PROVIDER` | `mock` (default), `fal`, `replicate`, or `photoroom` |
-| `FAL_KEY` or `FAL_API_KEY` | fal |
-| `REPLICATE_API_TOKEN` | Replicate |
-| `PHOTOROOM_API_KEY` | Photoroom |
+| `FAL_KEY` or `FAL_API_KEY` | fal. Required when `IMAGE_PROVIDER=fal`. Server only. |
+| `FAL_SCENE_MODEL` | Optional. Empty uses `fal-ai/flux-pro/kontext`. Set `fal-ai/flux-kontext/dev` for the cheaper scene model. |
+| `CREDITS_API_URL` | Base URL of the credits service. Server only. |
+| `CREDITS_API_KEY` | `x-api-key` for the credits service. Server only. |
+| `REPLICATE_API_TOKEN` | Replicate (preview only in this build) |
+| `PHOTOROOM_API_KEY` | Photoroom (preview only in this build) |
 
-A missing key, or a key that is present, still returns a mock preview. The response says which key was missing or found. Live model HTTP calls are the fashion-model step on the roadmap.
+`mock` does not call fal and does not reserve credits. `fal` reserves credits before the model call and refunds them if the call fails. Set the same names in the Wix app environment for a deployed version (`npx wix env set`) and in `.env` or `.env.local` for `wix dev`. Do not put `FAL_KEY` or `CREDITS_API_KEY` in dashboard code.
 
 ## 5. Run it on a test site
 
@@ -145,10 +148,10 @@ src/pages/api/image-processing.ts
 src/image-processing/
 ```
 
-`src/image-processing/providers.ts` is the seam for a real fal, Replicate, or Photoroom call. `process` on those providers is where the model request goes.
+`src/image-processing/fal.ts` calls fal. `src/image-processing/credits-client.ts` is the credits service client. `src/image-processing/providers.ts` still covers the mock, Replicate, and Photoroom previews.
 
 ## Roadmap
 
 1. **MVP (this repo).** Product list, editor, preview actions, before/after, batch scene preview, credits counter, and the provider interface.
-2. **Credits and billing.** Persist the balance per site, charge a credit per successful image, and sell packs through Wix app billing.
-3. **AI models for fashion.** Call fal, Replicate, or Photoroom for on-model and ghost-mannequin shots, then import the file with Media Manager and set it as the product's main photo.
+2. **Credits and billing.** Sell credit packs through Wix app billing. The balance itself now lives in the credits service.
+3. **More AI models.** Replicate and Photoroom still return a preview. Fashion-specific shots (on-model, ghost mannequin) are not wired yet.
