@@ -7,8 +7,11 @@
  *   `{ jobId, cost, action, alreadyReserved }`. A retry must send the same
  *   siteId, jobId, and cost. `action` is `remove_bg | replace_bg | ai_scene | publish`.
  * - `POST /credits/refund` `{ siteId, jobId }` → account plus `{ amount, alreadyRefunded }`.
- * - `POST /credits/grant` `{ siteId, amount, idempotencyKey }` → account plus
- *   `{ amount, idempotencyKey, alreadyGranted }`. The key is the Wix invoice id.
+ * - `POST /credits/grant` `{ siteId, purchaseId, credits }` →
+ *   `{ siteId, plan, balance, lifetimeGranted, eventId, granted, alreadyApplied }`.
+ *   `purchaseId` is the Wix invoice id. The same purchase id and credit count
+ *   returns `alreadyApplied: true` and the current balance. A different credit
+ *   count for that purchase id is `409`.
  * Errors are JSON `{ code }`:
  * - `402 insufficient_credits` → the existing no-credits message
  * - `404 unknown_job` on refund → nothing to refund
@@ -178,13 +181,18 @@ export async function refundCredits(
 
 export async function grantCredits(
   siteId: string,
-  amount: number,
-  idempotencyKey: string,
+  credits: number,
+  purchaseId: string,
   env: NodeJS.ProcessEnv,
-): Promise<{ remaining: number; alreadyGranted: boolean }> {
+): Promise<{ remaining: number; alreadyApplied: boolean }> {
+  const id = purchaseId.trim();
+  if (!id || !Number.isInteger(credits) || credits < 1 || credits > 1_000_000) {
+    console.error('Credits grant needs a purchase id and a positive integer credit count');
+    throw new CreditsUnavailableError();
+  }
   const response = await creditsFetch(env, '/credits/grant', {
     method: 'POST',
-    body: JSON.stringify({ siteId, amount, idempotencyKey }),
+    body: JSON.stringify({ siteId, purchaseId: id, credits }),
   });
   if (response.status === 409) {
     const failure = await readFailure(response);
@@ -193,14 +201,13 @@ export async function grantCredits(
   }
   if (!response.ok) throwForFailure('grant', await readFailure(response));
   const body: unknown = await response.json().catch(() => undefined);
-  const alreadyGranted = Boolean(
-    body && typeof body === 'object' && 'alreadyGranted' in body && body.alreadyGranted === true,
+  const alreadyApplied = Boolean(
+    body && typeof body === 'object' && 'alreadyApplied' in body && body.alreadyApplied === true,
   );
   const remaining = readBalance(body);
   if (remaining === undefined) {
-    if (alreadyGranted) return { remaining: 0, alreadyGranted: true };
     console.error('Credits grant response had no balance');
     throw new CreditsUnavailableError();
   }
-  return { remaining: Math.max(0, remaining), alreadyGranted };
+  return { remaining: Math.max(0, remaining), alreadyApplied };
 }
