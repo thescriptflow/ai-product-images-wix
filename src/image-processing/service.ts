@@ -1,50 +1,64 @@
-import { isProviderId, type CreditsResponse, type ProcessImageRequest, type ProcessImageResponse, type ProviderId } from './contract';
+import { isProviderId, type CreditsResponse, type ImageAction, type ProcessImageRequest, type ProcessImageResponse, type ProviderId } from './contract';
+import { isFalConfigured, processWithFal } from './fal';
 import { providerById } from './providers';
+import { getBalance, refundCredits, reserveCredits } from './credits-store';
 
-const STARTING_CREDITS = 40;
+export function readEnv(): NodeJS.ProcessEnv {
+  const meta = (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+  const proc = typeof process !== 'undefined' && process.env ? process.env : {};
+  return { ...meta, ...proc } as NodeJS.ProcessEnv;
+}
 
-let creditsRemaining = STARTING_CREDITS;
-
-export function readProviderId(env: NodeJS.ProcessEnv = process.env): ProviderId {
+export function readProviderId(env: NodeJS.ProcessEnv = readEnv()): ProviderId {
   const raw = env.IMAGE_PROVIDER?.trim().toLowerCase() ?? '';
   return isProviderId(raw) ? raw : 'mock';
 }
 
-export function getCredits(env: NodeJS.ProcessEnv = process.env): CreditsResponse {
+function isConfigured(id: ProviderId, env: NodeJS.ProcessEnv): boolean {
+  return id === 'fal' ? isFalConfigured(env) : providerById(id).isConfigured(env);
+}
+
+export function creditCost(action: ImageAction): number {
+  if (action === 'ai-scene') return 2;
+  if (action === 'publish') return 0;
+  return 1;
+}
+
+export async function getCredits(siteId: string, env: NodeJS.ProcessEnv = readEnv()): Promise<CreditsResponse> {
   const provider = readProviderId(env);
+  const balance = await getBalance(siteId);
   return {
-    creditsRemaining,
+    creditsRemaining: balance.remaining,
     provider,
-    providerConfigured: providerById(provider).isConfigured(env),
+    providerConfigured: isConfigured(provider, env),
   };
 }
 
 export async function processImage(
   request: ProcessImageRequest,
-  env: NodeJS.ProcessEnv = process.env,
+  siteId: string,
+  env: NodeJS.ProcessEnv = readEnv(),
 ): Promise<ProcessImageResponse> {
-  if (creditsRemaining <= 0) {
-    throw new Error('No image credits remaining. Billing is on the roadmap; restart the dev server to reset the local balance.');
+  const cost = creditCost(request.action);
+  const remaining = await reserveCredits(siteId, cost);
+  try {
+    const providerId = readProviderId(env);
+    const live = providerId === 'fal';
+    const result = live
+      ? await processWithFal(request, env)
+      : await providerById(providerId).process(request, env);
+    return {
+      provider: providerId,
+      mocked: !live,
+      action: request.action,
+      productId: request.productId,
+      ...(request.imageUrl ? { originalUrl: request.imageUrl } : {}),
+      resultUrl: result.resultUrl,
+      creditsRemaining: remaining,
+      message: result.message,
+    };
+  } catch (error) {
+    await refundCredits(siteId, cost);
+    throw error;
   }
-
-  const providerId = readProviderId(env);
-  const provider = providerById(providerId);
-  const result = await provider.process(request, env);
-  creditsRemaining -= 1;
-
-  const publishNote =
-    request.action === 'publish'
-      ? ' Publish is preview-only here: a live run would import the image with Media Manager and set it as the product photo.'
-      : '';
-
-  return {
-    provider: provider.id,
-    mocked: true,
-    action: request.action,
-    productId: request.productId,
-    ...(request.imageUrl ? { originalUrl: request.imageUrl } : {}),
-    resultUrl: result.resultUrl,
-    creditsRemaining,
-    message: `${result.message}${publishNote}`,
-  };
 }
