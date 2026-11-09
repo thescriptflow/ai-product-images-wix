@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Box, Button, Card, Input, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import { EntityPage, useEntityPageContext } from '@wix/patterns';
@@ -69,7 +68,6 @@ export const ProductStudio = ({
   productId: string;
   onCreditsChange: (remaining: number) => void;
 }) => {
-  const navigate = useNavigate();
   const page = useEntityPageContext<CatalogProduct, ProductFormFields>();
   const product = page.entity;
   const [photos, setPhotos] = useState<ProductPhoto[]>([]);
@@ -201,14 +199,7 @@ export const ProductStudio = ({
 
   return (
     <EntityPage.Card>
-      <Card.Header
-        title="Photo studio"
-        suffix={
-          <Button skin="standard" size="small" onClick={() => navigate('/credits')}>
-            Buy credits
-          </Button>
-        }
-      />
+      <Card.Header title="Photo studio" />
       <Card.Divider />
       <Card.Content>
         <Box direction="vertical" gap="SP5">

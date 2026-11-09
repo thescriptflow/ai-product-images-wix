@@ -9,8 +9,6 @@ import {
   CollectionSearch,
   CollectionToolbarFilters,
   MultiBulkActionToolbar,
-  PrimaryActionButton,
-  PrimaryActions,
   MultiSelectCheckboxFilter,
   Table,
   stringsArrayFilter,
@@ -142,13 +140,6 @@ export const ProductsCollectionPage = () => {
           hideTotal: true,
           badges: [{ text: creditsLabel, skin: 'premium' }],
         }}
-        primaryAction={
-          <PrimaryActions
-            label="Buy credits"
-            prefixIcon={<CreditCard />}
-            onClick={() => navigate('/credits')}
-          />
-        }
         subtitle={{
           text: 'Open a product to remove or replace the background, preview a lifestyle scene, and compare it with the current photo.',
         }}
@@ -162,11 +153,6 @@ export const ProductsCollectionPage = () => {
         <Table
           state={state}
           horizontalScroll
-          primaryActionButton={
-            <PrimaryActionButton prefixIcon={<CreditCard />} onClick={() => navigate('/credits')}>
-              Buy credits
-            </PrimaryActionButton>
-          }
           search={<CollectionSearch placeholder="Search by product name" />}
           filters={
             <CollectionToolbarFilters>
