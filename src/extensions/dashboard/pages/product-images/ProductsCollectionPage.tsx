@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Badge, Image, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import {
@@ -8,6 +9,7 @@ import {
   CollectionSearch,
   CollectionToolbarFilters,
   MultiBulkActionToolbar,
+  PrimaryActions,
   MultiSelectCheckboxFilter,
   Table,
   stringsArrayFilter,
@@ -17,7 +19,8 @@ import {
 } from '@wix/patterns';
 import { CollectionPage } from '@wix/patterns/page';
 import { usePatternsNavigate } from '@wix/patterns/router';
-import { Sparkles } from '@wix/wix-ui-icons-common/lazy';
+import { CreditCard, Sparkles } from '@wix/wix-ui-icons-common/lazy';
+import { fetchBilling } from './billing-client';
 import { defaultPrompt, fetchCredits, processProductImage } from './image-client';
 import {
   fetchProductsPage,
@@ -37,6 +40,7 @@ const productTypeFilter = stringsArrayFilter<CatalogProductType>({
 });
 
 export const ProductsCollectionPage = () => {
+  const navigate = useNavigate();
   const { navigateToEntityPage } = usePatternsNavigate<CatalogProduct>();
   const { errorHandler } = useWixPatternsContainer();
   const [creditsLabel, setCreditsLabel] = useState('Credits …');
@@ -44,13 +48,20 @@ export const ProductsCollectionPage = () => {
 
   useEffect(() => {
     let active = true;
-    fetchCredits()
-      .then((credits) => {
-        if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+    fetchBilling()
+      .then((billing) => {
+        if (!active) return;
+        setCreditsLabel(typeof billing.balance === 'number' ? `${billing.balance} credits` : 'Credits unavailable');
       })
       .catch((error: unknown) => {
         console.error('Could not load credits', error);
-        if (active) setCreditsLabel('Credits unavailable');
+        void fetchCredits()
+          .then((credits) => {
+            if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+          })
+          .catch(() => {
+            if (active) setCreditsLabel('Credits unavailable');
+          });
       });
     return () => {
       active = false;
@@ -129,6 +140,13 @@ export const ProductsCollectionPage = () => {
           hideTotal: true,
           badges: [{ text: creditsLabel, skin: 'premium' }],
         }}
+        primaryAction={
+          <PrimaryActions
+            label="Buy credits"
+            prefixIcon={<CreditCard />}
+            onClick={() => navigate('/credits')}
+          />
+        }
         subtitle={{
           text: 'Open a product to remove or replace the background, preview a lifestyle scene, and compare it with the current photo.',
         }}

@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom';
 import { Box, Card, Dropdown, FormField, Input, InputArea } from '@wix/design-system';
 import { EntityPage, useEntityPage, useEntityPageContext } from '@wix/patterns';
 import { useController, useForm } from '@wix/patterns/form';
+import { fetchBilling } from './billing-client';
 import { fetchCredits } from './image-client';
 import { fetchProduct, saveProduct, type CatalogProduct, type ProductVisibility } from './products-api';
 import { ProductStudio } from './ProductStudio';
@@ -25,13 +26,20 @@ export const ProductEntityPage = () => {
 
   useEffect(() => {
     let active = true;
-    fetchCredits()
-      .then((credits) => {
-        if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+    fetchBilling()
+      .then((billing) => {
+        if (!active) return;
+        setCreditsLabel(typeof billing.balance === 'number' ? `${billing.balance} credits` : 'Credits unavailable');
       })
       .catch((error: unknown) => {
         console.error('Could not load credits', error);
-        if (active) setCreditsLabel('Credits unavailable');
+        void fetchCredits()
+          .then((credits) => {
+            if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+          })
+          .catch(() => {
+            if (active) setCreditsLabel('Credits unavailable');
+          });
       });
     return () => {
       active = false;

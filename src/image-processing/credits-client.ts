@@ -7,6 +7,8 @@
  *   `{ jobId, cost, action, alreadyReserved }`. A retry must send the same
  *   siteId, jobId, and cost. `action` is `remove_bg | replace_bg | ai_scene | publish`.
  * - `POST /credits/refund` `{ siteId, jobId }` → account plus `{ amount, alreadyRefunded }`.
+ * - `POST /credits/grant` `{ siteId, amount, idempotencyKey }` → account plus
+ *   `{ amount, idempotencyKey, alreadyGranted }`. The key is the Wix invoice id.
  * Errors are JSON `{ code }`:
  * - `402 insufficient_credits` → the existing no-credits message
  * - `404 unknown_job` on refund → nothing to refund
@@ -18,7 +20,7 @@ import type { ImageAction } from './contract';
 
 const REQUEST_TIMEOUT_MS = 8_000;
 
-const NO_CREDITS_MESSAGE = 'No image credits remaining. Upgrade your plan to continue.';
+const NO_CREDITS_MESSAGE = 'No image credits remaining. Buy credits to continue.';
 const UNAVAILABLE_MESSAGE = 'Image credits are unavailable right now. Please try again shortly.';
 
 const CREDIT_ACTION: Record<ImageAction, 'remove_bg' | 'replace_bg' | 'ai_scene' | 'publish'> = {
@@ -39,6 +41,13 @@ export class CreditsUnavailableError extends Error {
   constructor() {
     super(UNAVAILABLE_MESSAGE);
     this.name = 'CreditsUnavailableError';
+  }
+}
+
+export class CreditGrantConflictError extends Error {
+  constructor() {
+    super('This purchase was already recorded with different details.');
+    this.name = 'CreditGrantConflictError';
   }
 }
 
@@ -165,4 +174,33 @@ export async function refundCredits(
   const failure = await readFailure(response);
   if (failure.status === 404 && failure.code === 'unknown_job') return;
   throwForFailure('refund', failure);
+}
+
+export async function grantCredits(
+  siteId: string,
+  amount: number,
+  idempotencyKey: string,
+  env: NodeJS.ProcessEnv,
+): Promise<{ remaining: number; alreadyGranted: boolean }> {
+  const response = await creditsFetch(env, '/credits/grant', {
+    method: 'POST',
+    body: JSON.stringify({ siteId, amount, idempotencyKey }),
+  });
+  if (response.status === 409) {
+    const failure = await readFailure(response);
+    console.error('Credits grant conflict', failure.code ?? '');
+    throw new CreditGrantConflictError();
+  }
+  if (!response.ok) throwForFailure('grant', await readFailure(response));
+  const body: unknown = await response.json().catch(() => undefined);
+  const alreadyGranted = Boolean(
+    body && typeof body === 'object' && 'alreadyGranted' in body && body.alreadyGranted === true,
+  );
+  const remaining = readBalance(body);
+  if (remaining === undefined) {
+    if (alreadyGranted) return { remaining: 0, alreadyGranted: true };
+    console.error('Credits grant response had no balance');
+    throw new CreditsUnavailableError();
+  }
+  return { remaining: Math.max(0, remaining), alreadyGranted };
 }

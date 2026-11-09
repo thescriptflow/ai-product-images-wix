@@ -11,7 +11,7 @@ The project uses the current [Wix CLI](https://dev.wix.com/docs/wix-cli/guides/a
 - Product editor that saves name, visibility, and description through the matching catalog API.
 - Photo studio actions: **Remove background**, **Replace background**, **AI scene**, **Publish**, plus a before/after preview.
 - Batch **AI scene** on the products you select in the table.
-- Credits badge. The balance is read from the credits service for the current Wix site. Remove background and replace background cost 1 credit, AI scene costs 2, and publish costs 0. The mock provider does not charge.
+- Credits badge. The balance is read from the credits service for the current Wix site. Remove background and replace background cost 1 credit, AI scene costs 2, and publish costs 0. The mock provider does not charge. **Buy credits** opens Wix checkout for a one-time pack. Paid credits are granted on the credits service and do not expire.
 - HTTP endpoint `POST /api/image-processing` and `GET /api/image-processing`.
 - Provider interface for `mock` (default), `fal`, `replicate`, and `photoroom`. `fal` calls Bria background removal and FLUX Kontext. The other providers still return a preview.
 
@@ -84,6 +84,7 @@ In the app dashboard, open `https://manage.wix.com/apps/<appId>/home`, then **De
 | Read hidden products and merchant fields on V3 | `SCOPE.STORES.PRODUCT_READ_ADMIN` |
 | Update products on V3 | `SCOPE.STORES.PRODUCT_WRITE` |
 | Import a generated photo into Media Manager | `SCOPE.DC-MEDIA.MANAGE-MEDIAMANAGER` |
+| Create a checkout link and read purchase history | `SCOPE.DC.MANAGE-YOUR-APP` |
 
 After you save permissions, install or update the app on the test site and accept the new consent. Hidden products stay out of the list until the admin read scope is granted. On a classic catalog, Query Products also omits hidden products unless `includeHiddenProducts` is set, and the typed query builder this app uses does not expose that flag.
 
@@ -107,8 +108,13 @@ npx wix env pull
 | `IMAGE_PROVIDER` | `mock` (default), `fal`, `replicate`, or `photoroom` |
 | `FAL_KEY` or `FAL_API_KEY` | fal. Required when `IMAGE_PROVIDER=fal`. Server only. |
 | `FAL_SCENE_MODEL` | Optional. Empty uses `fal-ai/flux-pro/kontext`. Set `fal-ai/flux-kontext/dev` for the cheaper scene model. |
-| `CREDITS_API_URL` | Base URL of the credits service. The app calls `/credits/:siteId`, `/credits/reserve`, and `/credits/refund`. Server only. |
+| `CREDITS_API_URL` | Base URL of the credits service. The app calls `/credits/:siteId`, `/credits/reserve`, `/credits/refund`, and `/credits/grant`. Server only. |
 | `CREDITS_API_KEY` | `x-api-key` for every credits path except `/health`. Server only. |
+| `CREDIT_PACK_20_PRODUCT_ID` | Product ID of the 20-credit Single plan. Checkout stays disabled until this is set. |
+| `CREDIT_PACK_60_PRODUCT_ID` | Product ID of the 60-credit Single plan. |
+| `CREDIT_PACK_150_PRODUCT_ID` | Product ID of the 150-credit Single plan. |
+| `CREDIT_PACKS` | Optional JSON array `[{"key":"20","productId":"..."}]` that overrides the three variables. |
+| `BILLING_TEST_CHECKOUT` | `true` opens the $0 Wix test checkout. Set `false` before charging the real prices. |
 | `REPLICATE_API_TOKEN` | Replicate (preview only in this build) |
 | `PHOTOROOM_API_KEY` | Photoroom (preview only in this build) |
 
@@ -145,6 +151,9 @@ src/extensions.ts
 src/extensions/dashboard/BusinessManagerTheme.tsx
 src/extensions/dashboard/pages/product-images/
 src/pages/api/image-processing.ts
+src/pages/api/billing.ts
+src/billing/
+src/extensions/backend/events/
 src/image-processing/
 ```
 
@@ -153,5 +162,5 @@ src/image-processing/
 ## Roadmap
 
 1. **MVP (this repo).** Product list, editor, preview actions, before/after, batch scene preview, credits counter, and the provider interface.
-2. **Credits and billing.** Sell credit packs through Wix app billing. The balance itself now lives in the credits service.
+2. **Credits and billing.** Credit packs are sold through Wix app billing (Freemium plus three Single plans). The balance lives in the credits service. Plan names, prices, the external pricing page, and product IDs are set in the Wix app dashboard.
 3. **More AI models.** Replicate and Photoroom still return a preview. Fashion-specific shots (on-model, ghost mannequin) are not wired yet.
