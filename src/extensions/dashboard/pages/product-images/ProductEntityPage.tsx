@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
-import { Box, Card, Dropdown, FormField, Input, InputArea } from '@wix/design-system';
+import { useNavigate, useParams } from 'react-router-dom';
+import { Box, Button, Card, Dropdown, FormField, Input, InputArea } from '@wix/design-system';
 import { EntityPage, useEntityPage, useEntityPageContext } from '@wix/patterns';
 import { useController, useForm } from '@wix/patterns/form';
+import { fetchBilling } from './billing-client';
 import { fetchCredits } from './image-client';
 import { fetchProduct, saveProduct, type CatalogProduct, type ProductVisibility } from './products-api';
 import { ProductStudio } from './ProductStudio';
@@ -19,19 +20,27 @@ const VISIBILITY_OPTIONS: { id: ProductVisibility; value: string }[] = [
 ];
 
 export const ProductEntityPage = () => {
+  const navigate = useNavigate();
   const { id } = useParams<{ id?: string }>();
   const form = useForm<ProductFormFields>();
   const [creditsLabel, setCreditsLabel] = useState('Credits …');
 
   useEffect(() => {
     let active = true;
-    fetchCredits()
-      .then((credits) => {
-        if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+    fetchBilling()
+      .then((billing) => {
+        if (!active) return;
+        setCreditsLabel(typeof billing.balance === 'number' ? `${billing.balance} credits` : 'Credits unavailable');
       })
       .catch((error: unknown) => {
         console.error('Could not load credits', error);
-        if (active) setCreditsLabel('Credits unavailable');
+        void fetchCredits()
+          .then((credits) => {
+            if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+          })
+          .catch(() => {
+            if (active) setCreditsLabel('Credits unavailable');
+          });
       });
     return () => {
       active = false;
@@ -71,6 +80,11 @@ export const ProductEntityPage = () => {
       />
       <EntityPage.Content>
         <EntityPage.MainContent>
+          <Box align="right">
+            <Button skin="standard" size="medium" onClick={() => navigate('/credits')}>
+              Buy credits
+            </Button>
+          </Box>
           <EntityPage.Card>
             <Card.Header title="Details" />
             <Card.Divider />

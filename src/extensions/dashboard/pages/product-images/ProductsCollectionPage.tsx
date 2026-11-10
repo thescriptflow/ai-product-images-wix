@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { Badge, Image, Text } from '@wix/design-system';
+import React, { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Badge, Box, Button, Image, Text } from '@wix/design-system';
 import { dashboard } from '@wix/dashboard';
 import {
   CollectionEmptyState,
@@ -17,7 +18,9 @@ import {
 } from '@wix/patterns';
 import { CollectionPage } from '@wix/patterns/page';
 import { usePatternsNavigate } from '@wix/patterns/router';
+import { CreditCard } from '@wix/wix-ui-icons-common';
 import { Sparkles } from '@wix/wix-ui-icons-common/lazy';
+import { fetchBilling } from './billing-client';
 import { defaultPrompt, fetchCredits, processProductImage } from './image-client';
 import {
   fetchProductsPage,
@@ -37,19 +40,28 @@ const productTypeFilter = stringsArrayFilter<CatalogProductType>({
 });
 
 export const ProductsCollectionPage = () => {
+  const navigate = useNavigate();
   const { navigateToEntityPage } = usePatternsNavigate<CatalogProduct>();
   const { errorHandler } = useWixPatternsContainer();
   const [creditsLabel, setCreditsLabel] = useState('Credits …');
+  const batchRef = useRef(false);
 
   useEffect(() => {
     let active = true;
-    fetchCredits()
-      .then((credits) => {
-        if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+    fetchBilling()
+      .then((billing) => {
+        if (!active) return;
+        setCreditsLabel(typeof billing.balance === 'number' ? `${billing.balance} credits` : 'Credits unavailable');
       })
       .catch((error: unknown) => {
         console.error('Could not load credits', error);
-        if (active) setCreditsLabel('Credits unavailable');
+        void fetchCredits()
+          .then((credits) => {
+            if (active) setCreditsLabel(`${credits.creditsRemaining} credits`);
+          })
+          .catch(() => {
+            if (active) setCreditsLabel('Credits unavailable');
+          });
       });
     return () => {
       active = false;
@@ -84,6 +96,8 @@ export const ProductsCollectionPage = () => {
       });
       return;
     }
+    if (batchRef.current) return;
+    batchRef.current = true;
     let lastCredits = creditsLabel;
     try {
       for (const product of withPhotos) {
@@ -94,7 +108,7 @@ export const ProductsCollectionPage = () => {
           ...(product.imageUrl ? { imageUrl: product.imageUrl } : {}),
           prompt: defaultPrompt('ai-scene'),
         });
-        lastCredits = `${result.creditsRemaining} credits`;
+        if (typeof result.creditsRemaining === 'number') lastCredits = `${result.creditsRemaining} credits`;
       }
       setCreditsLabel(lastCredits);
       dashboard.showToast({
@@ -107,6 +121,14 @@ export const ProductsCollectionPage = () => {
         message: error instanceof Error ? error.message : 'Batch AI scene failed',
         type: 'error',
       });
+      try {
+        const credits = await fetchCredits();
+        setCreditsLabel(`${credits.creditsRemaining} credits`);
+      } catch (refreshError) {
+        console.error('Could not refresh credits', refreshError);
+      }
+    } finally {
+      batchRef.current = false;
     }
   };
 
@@ -123,6 +145,11 @@ export const ProductsCollectionPage = () => {
         }}
       />
       <CollectionPage.Content>
+        <Box align="right" paddingBottom="SP3">
+          <Button skin="standard" size="medium" prefixIcon={<CreditCard />} onClick={() => navigate('/credits')}>
+            Buy credits
+          </Button>
+        </Box>
         <Table
           state={state}
           horizontalScroll

@@ -203,7 +203,8 @@ function mapV1(product: products.Product): CatalogProduct | undefined {
 function v3Image(product: productsV3.V3Product): string | undefined {
   const main = product.media?.main;
   if (!main) return undefined;
-  return main.thumbnail?.url ?? main.image ?? main.url;
+  const raw = main.thumbnail?.url ?? main.image ?? main.url;
+  return raw ? fullSizeUrl(raw) : undefined;
 }
 
 function toHtmlDescription(value: string): string {
@@ -217,4 +218,9 @@ function toHtmlDescription(value: string): string {
 
 function stripHtml(value: string): string {
   return value.replace(/<[^>]*>/g, '').trim();
+}
+
+function fullSizeUrl(url: string): string {
+  const match = /^(https:\/\/static\.wixstatic\.com\/media\/[^/?#]+)(\/v1\/[^?#]*)?/.exec(url);
+  return match?.[1] ?? url;
 }

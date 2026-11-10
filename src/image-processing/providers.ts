@@ -93,7 +93,9 @@ function vendorProvider(id: Exclude<ProviderId, 'mock'>, configured: (env: NodeJ
 
 export const falProvider = vendorProvider(
   'fal',
-  (env) => Boolean(env.FAL_KEY?.trim() || env.FAL_API_KEY?.trim()),
+  (env) => Boolean(
+    (env.CREDITS_API_URL?.trim() && env.CREDITS_API_KEY?.trim()) || env.FAL_KEY?.trim() || env.FAL_API_KEY?.trim(),
+  ),
 );
 
 export const replicateProvider = vendorProvider(

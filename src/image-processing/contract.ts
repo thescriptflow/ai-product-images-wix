@@ -26,7 +26,7 @@ export interface ProcessImageResponse {
   productId: string;
   originalUrl?: string;
   resultUrl: string;
-  creditsRemaining: number;
+  creditsRemaining: number | null;
   message: string;
 }
 
