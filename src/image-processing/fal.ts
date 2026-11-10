@@ -65,14 +65,38 @@ function readKey(env: NodeJS.ProcessEnv): string | undefined {
   return key || undefined;
 }
 
+/**
+ * How this backend reaches fal.
+ * - `proxy`: through the credits API (`{CREDITS_API_URL}/fal/run|queue/...` with `x-api-key`),
+ *   which adds the fal key server-side. Wix hosting drops the `Authorization` header on
+ *   outbound requests, so this is used whenever CREDITS_API_URL and CREDITS_API_KEY are set.
+ * - `direct`: straight to fal with FAL_KEY, only when the credits API is not configured.
+ */
+export type FalAccess =
+  | { kind: 'proxy'; baseUrl: string; apiKey: string }
+  | { kind: 'direct'; key: string };
+
+export function readFalAccess(env: NodeJS.ProcessEnv): FalAccess | undefined {
+  const baseUrl = env.CREDITS_API_URL?.trim().replace(/\/+$/, '') ?? '';
+  const apiKey = env.CREDITS_API_KEY?.trim() ?? '';
+  if (baseUrl && apiKey) return { kind: 'proxy', baseUrl, apiKey };
+  const key = readKey(env);
+  return key ? { kind: 'direct', key } : undefined;
+}
+
+/** Server-only secret used to sign scene tickets. */
+export function falTicketSecret(access: FalAccess): string {
+  return access.kind === 'proxy' ? access.apiKey : access.key;
+}
+
 export function isFalConfigured(env: NodeJS.ProcessEnv): boolean {
-  return readKey(env) !== undefined;
+  return readFalAccess(env) !== undefined;
 }
 
 export function isFalQueueUrl(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.protocol === 'https:' && url.hostname === 'queue.fal.run';
+    return url.protocol === 'https:' && url.hostname === 'queue.fal.run' && !url.username && !url.password && !url.port;
   } catch {
     return false;
   }
@@ -83,8 +107,15 @@ function modelUrl(host: string, modelId: string): string {
   return `${host}/${path}`;
 }
 
-function authHeaders(key: string): Record<string, string> {
-  return { Authorization: `Key ${key}` };
+/** Maps a fal.run or queue.fal.run URL to the request this backend actually sends. */
+function falRequest(access: FalAccess, falUrl: string): { url: string; headers: Record<string, string> } {
+  if (access.kind === 'direct') return { url: falUrl, headers: { Authorization: `Key ${access.key}` } };
+  const parsed = new URL(falUrl);
+  const route = parsed.hostname === 'queue.fal.run' ? 'queue' : 'run';
+  return {
+    url: `${access.baseUrl}/fal/${route}${parsed.pathname}${parsed.search}`,
+    headers: { 'x-api-key': access.apiKey },
+  };
 }
 
 async function falFetch(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
@@ -98,10 +129,48 @@ async function falFetch(url: string, init: RequestInit, timeoutMs: number): Prom
   }
 }
 
+function callFal(
+  access: FalAccess,
+  falUrl: string,
+  init: { method: 'GET' | 'POST' | 'PUT'; body?: string },
+  timeoutMs: number,
+): Promise<Response> {
+  const target = falRequest(access, falUrl);
+  return falFetch(
+    target.url,
+    {
+      method: init.method,
+      headers: { ...target.headers, ...(init.body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(init.body ? { body: init.body } : {}),
+    },
+    timeoutMs,
+  );
+}
+
+function errorReason(text: string): string {
+  let reason = text;
+  try {
+    const body: unknown = JSON.parse(text);
+    if (body && typeof body === 'object') {
+      const record = body as Record<string, unknown>;
+      const detail = record.detail;
+      if (typeof detail === 'string') reason = detail;
+      else if (Array.isArray(detail) && detail[0] && typeof detail[0] === 'object' && typeof (detail[0] as { msg?: unknown }).msg === 'string') {
+        reason = (detail[0] as { msg: string }).msg;
+      } else if (typeof record.error === 'string') reason = record.error;
+      else if (typeof record.message === 'string') reason = record.message;
+    }
+  } catch {
+    // Not JSON; use the raw text.
+  }
+  return reason.replace(/\s+/g, ' ').trim().slice(0, 160);
+}
+
 async function readFalError(response: Response): Promise<ImageServiceError> {
   const text = await response.text().catch(() => '');
   console.error('fal request failed', response.status, text.slice(0, 300));
-  return new ImageServiceError(FAILED);
+  const reason = errorReason(text);
+  return new ImageServiceError(`${FAILED} (fal ${response.status}${reason ? `: ${reason}` : ''})`);
 }
 
 function firstUrl(output: FalImageOutput): string | undefined {
@@ -110,16 +179,13 @@ function firstUrl(output: FalImageOutput): string | undefined {
 
 async function callFalSync(
   modelId: string,
-  key: string,
+  access: FalAccess,
   input: Record<string, unknown>,
 ): Promise<FalImageOutput> {
-  const response = await falFetch(
+  const response = await callFal(
+    access,
     modelUrl('https://fal.run', modelId),
-    {
-      method: 'POST',
-      headers: { ...authHeaders(key), 'Content-Type': 'application/json' },
-      body: JSON.stringify(input),
-    },
+    { method: 'POST', body: JSON.stringify(input) },
     SYNC_TIMEOUT_MS,
   );
   if (!response.ok) throw await readFalError(response);
@@ -153,14 +219,14 @@ function requireImageUrl(request: ProcessImageRequest): string {
 export async function submitScene(
   request: ProcessImageRequest,
   env: NodeJS.ProcessEnv,
-  key: string,
+  access: FalAccess,
 ): Promise<FalPending> {
   const modelId = resolveSceneModel(env);
-  const response = await falFetch(
+  const response = await callFal(
+    access,
     modelUrl('https://queue.fal.run', modelId),
     {
       method: 'POST',
-      headers: { ...authHeaders(key), 'Content-Type': 'application/json' },
       body: JSON.stringify({
         prompt: buildScenePrompt(request.prompt, request.productName),
         image_url: requireImageUrl(request),
@@ -187,12 +253,12 @@ export async function submitScene(
 export async function pollScene(
   statusUrl: string,
   responseUrl: string,
-  key: string,
+  access: FalAccess,
 ): Promise<FalImage | { kind: 'pending' }> {
   if (!isFalQueueUrl(statusUrl) || !isFalQueueUrl(responseUrl)) {
     throw new ImageServiceError(FAILED);
   }
-  const statusResponse = await falFetch(statusUrl, { method: 'GET', headers: authHeaders(key) }, STATUS_TIMEOUT_MS);
+  const statusResponse = await callFal(access, statusUrl, { method: 'GET' }, STATUS_TIMEOUT_MS);
   if (statusResponse.status === 404) {
     console.error('fal queue request was not found');
     throw new ImageServiceError(FAILED);
@@ -215,7 +281,7 @@ export async function pollScene(
     throw new ImageServiceError(FAILED);
   }
   const resultUrl = status.response_url && isFalQueueUrl(status.response_url) ? status.response_url : responseUrl;
-  const resultResponse = await falFetch(resultUrl, { method: 'GET', headers: authHeaders(key) }, STATUS_TIMEOUT_MS);
+  const resultResponse = await callFal(access, resultUrl, { method: 'GET' }, STATUS_TIMEOUT_MS);
   if (resultResponse.status >= 500) {
     console.error('fal queue result failed', resultResponse.status);
     throw new ImageServiceError(UNREACHABLE, true);
@@ -226,10 +292,10 @@ export async function pollScene(
   return { kind: 'image', resultUrl: sceneUrl, message: 'AI scene created with fal (FLUX Kontext).' };
 }
 
-export async function cancelScene(cancelUrl: string | undefined, key: string): Promise<void> {
+export async function cancelScene(cancelUrl: string | undefined, access: FalAccess): Promise<void> {
   if (!cancelUrl || !isFalQueueUrl(cancelUrl)) return;
   try {
-    await falFetch(cancelUrl, { method: 'PUT', headers: authHeaders(key) }, STATUS_TIMEOUT_MS);
+    await callFal(access, cancelUrl, { method: 'PUT' }, STATUS_TIMEOUT_MS);
   } catch (error) {
     console.error('Could not cancel the fal queue request', error);
   }
@@ -239,8 +305,8 @@ export async function processWithFal(
   request: ProcessImageRequest,
   env: NodeJS.ProcessEnv,
 ): Promise<FalResult> {
-  const key = readKey(env);
-  if (!key) throw new Error('FAL_KEY is not set.');
+  const access = readFalAccess(env);
+  if (!access) throw new Error('CREDITS_API_URL and CREDITS_API_KEY are not set.');
   const live =
     request.action === 'remove-background' ||
     request.action === 'replace-background' ||
@@ -248,9 +314,9 @@ export async function processWithFal(
   if (!live) throw new Error('This action is not connected to fal yet.');
   const imageUrl = requireImageUrl(request);
 
-  if (request.action === 'ai-scene') return submitScene(request, env, key);
+  if (request.action === 'ai-scene') return submitScene(request, env, access);
 
-  const output = await callFalSync(FAL_MODELS.removeBackground, key, { image_url: imageUrl });
+  const output = await callFalSync(FAL_MODELS.removeBackground, access, { image_url: imageUrl });
   const resultUrl = firstUrl(output);
   if (!resultUrl) throw new ImageServiceError(NO_IMAGE);
   if (request.action === 'replace-background') {
@@ -263,6 +329,3 @@ export async function processWithFal(
   return { kind: 'image', resultUrl, message: 'Background removed with fal (Bria RMBG 2.0).' };
 }
 
-export function readFalKey(env: NodeJS.ProcessEnv): string | undefined {
-  return readKey(env);
-}

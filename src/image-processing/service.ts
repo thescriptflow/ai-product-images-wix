@@ -14,7 +14,8 @@ import {
   isFalQueueUrl,
   pollScene,
   processWithFal,
-  readFalKey,
+  readFalAccess,
+  falTicketSecret,
 } from './fal';
 import { providerById } from './providers';
 import { CreditsUnavailableError, NoCreditsError, getBalance, refundCredits, reserveCredits } from './credits-client';
@@ -160,26 +161,26 @@ async function continueScene(
   siteId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<ProcessOutcome> {
-  const key = readFalKey(env);
-  if (!key) throw new Error('FAL_KEY is not set.');
+  const access = readFalAccess(env);
+  if (!access) throw new Error('CREDITS_API_URL and CREDITS_API_KEY are not set.');
   if (!request.ticket) throw new ImageServiceError('This image request is no longer valid. Please try again.');
-  const ticket = readTicket(request.ticket, key);
+  const ticket = readTicket(request.ticket, falTicketSecret(access));
   if (ticket.siteId !== siteId || ticket.jobId !== request.jobId) {
     throw new ImageServiceError('This image request is no longer valid. Please try again.');
   }
   if (Date.now() > ticket.exp) {
-    await cancelScene(ticket.cancelUrl, key);
+    await cancelScene(ticket.cancelUrl, access);
     const timeout = new ImageServiceError('The image service took too long. Please try again.');
     await refundQuietly(siteId, ticket.jobId, env, timeout);
     throw timeout;
   }
   try {
-    const polled = await pollScene(ticket.statusUrl, ticket.responseUrl, key);
+    const polled = await pollScene(ticket.statusUrl, ticket.responseUrl, access);
     if (polled.kind === 'pending') return pendingScene(request, ticket.remaining);
     return outcomeFromImage(request, 'fal', false, polled.resultUrl, polled.message, ticket.remaining);
   } catch (error) {
     if (error instanceof ImageServiceError && error.transient) return pendingScene(request, ticket.remaining);
-    await cancelScene(ticket.cancelUrl, key);
+    await cancelScene(ticket.cancelUrl, access);
     await refundQuietly(siteId, ticket.jobId, env, error);
     throw error;
   }
@@ -190,16 +191,16 @@ async function cancelSceneJob(
   siteId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<ProcessOutcome> {
-  const key = readFalKey(env);
-  if (!key || !request.ticket) {
+  const access = readFalAccess(env);
+  if (!access || !request.ticket) {
     throw new ImageServiceError('This image request is no longer valid. Please try again.');
   }
-  const ticket = readTicket(request.ticket, key);
+  const ticket = readTicket(request.ticket, falTicketSecret(access));
   if (ticket.siteId !== siteId || ticket.jobId !== request.jobId) {
     throw new ImageServiceError('This image request is no longer valid. Please try again.');
   }
   try {
-    const polled = await pollScene(ticket.statusUrl, ticket.responseUrl, key);
+    const polled = await pollScene(ticket.statusUrl, ticket.responseUrl, access);
     if (polled.kind === 'image') {
       return outcomeFromImage(request, 'fal', false, polled.resultUrl, polled.message, ticket.remaining);
     }
@@ -208,7 +209,7 @@ async function cancelSceneJob(
       console.error('Could not confirm the scene before cancelling', error);
     }
   }
-  await cancelScene(ticket.cancelUrl, key);
+  await cancelScene(ticket.cancelUrl, access);
   const timeout = new ImageServiceError('The image service took too long. Please try again.');
   await refundQuietly(siteId, ticket.jobId, env, timeout);
   throw timeout;
@@ -263,8 +264,8 @@ export async function processImage(
     reserved = true;
     const result = await processWithFal(request, env);
     if (result.kind === 'pending') {
-      const key = readFalKey(env);
-      if (!key) throw new Error('FAL_KEY is not set.');
+      const access = readFalAccess(env);
+      if (!access) throw new Error('CREDITS_API_URL and CREDITS_API_KEY are not set.');
       const ticket = signTicket(
         {
           siteId,
@@ -275,7 +276,7 @@ export async function processImage(
           exp: Date.now() + SCENE_TICKET_TTL_MS,
           remaining,
         },
-        key,
+        falTicketSecret(access),
       );
       const pending: PendingImageResponse = {
         pending: true,
