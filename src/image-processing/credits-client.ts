@@ -13,6 +13,9 @@
  *   Otherwise it is the product id and purchase time. The same purchase id and credit count
  *   returns `alreadyApplied: true` and the current balance. A different credit
  *   count for that purchase id is `409`.
+ * - `POST /credits/subscription` `{ siteId, active: true, plan, credits, cycleKey, periodStart, periodEnd, autoRenewing, invoiceId }`
+ *   or `{ siteId, active: false }` → account plus `{ granted, expired, alreadyApplied, stale, ended }`.
+ *   Grants one monthly allowance per cycle key and resets unused plan credits.
  * Errors are JSON `{ code }`:
  * - `402 insufficient_credits` → the existing no-credits message
  * - `404 unknown_job` on refund → nothing to refund
@@ -24,7 +27,7 @@ import type { ImageAction } from './contract';
 
 const REQUEST_TIMEOUT_MS = 8_000;
 
-const NO_CREDITS_MESSAGE = 'No image credits remaining. Buy credits to continue.';
+const NO_CREDITS_MESSAGE = 'No image credits remaining. Choose a monthly plan to continue.';
 const UNAVAILABLE_MESSAGE = 'Image credits are unavailable right now. Please try again shortly.';
 
 const CREDIT_ACTION: Record<ImageAction, 'remove_bg' | 'replace_bg' | 'ai_scene' | 'publish'> = {
@@ -125,18 +128,102 @@ function throwForFailure(where: string, failure: CreditsFailure): never {
   throw new CreditsUnavailableError();
 }
 
+export interface SubscriptionCredits {
+  plan: string;
+  credits: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+  autoRenewing: boolean | null;
+}
+
+export interface CreditsAccount {
+  remaining: number;
+  subscription: SubscriptionCredits | null;
+}
+
+function readSubscription(value: unknown): SubscriptionCredits | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = (value as Record<string, unknown>).subscription;
+  if (!raw || typeof raw !== 'object') return null;
+  const sub = raw as Record<string, unknown>;
+  if (typeof sub.plan !== 'string' || typeof sub.credits !== 'number') return null;
+  return {
+    plan: sub.plan,
+    credits: Math.max(0, sub.credits),
+    periodStart: typeof sub.periodStart === 'string' ? sub.periodStart : null,
+    periodEnd: typeof sub.periodEnd === 'string' ? sub.periodEnd : null,
+    autoRenewing: typeof sub.autoRenewing === 'boolean' ? sub.autoRenewing : null,
+  };
+}
+
+function readAccount(body: unknown, where: string): CreditsAccount {
+  const remaining = readBalance(body);
+  if (remaining === undefined) {
+    console.error(`Credits ${where} response had no balance`);
+    throw new CreditsUnavailableError();
+  }
+  return { remaining: Math.max(0, remaining), subscription: readSubscription(body) };
+}
+
 export async function getBalance(
   siteId: string,
   env: NodeJS.ProcessEnv,
-): Promise<{ remaining: number }> {
+): Promise<CreditsAccount> {
   const response = await creditsFetch(env, `/credits/${encodeURIComponent(siteId)}`, { method: 'GET' });
   if (!response.ok) throwForFailure('balance', await readFailure(response));
-  const remaining = readBalance(await response.json().catch(() => undefined));
-  if (remaining === undefined) {
-    console.error('Credits balance response had no balance');
-    throw new CreditsUnavailableError();
+  return readAccount(await response.json().catch(() => undefined), 'balance');
+}
+
+export type SubscriptionSync =
+  | {
+      active: true;
+      plan: string;
+      credits: number;
+      cycleKey: string;
+      periodStart: string;
+      periodEnd: string;
+      autoRenewing: boolean | null;
+      invoiceId: string | null;
+    }
+  | { active: false };
+
+export async function syncSubscriptionCredits(
+  siteId: string,
+  sync: SubscriptionSync,
+  env: NodeJS.ProcessEnv,
+): Promise<CreditsAccount & { granted: number; expired: number; ended: boolean }> {
+  const body = sync.active
+    ? {
+        siteId,
+        active: true,
+        plan: sync.plan,
+        credits: sync.credits,
+        cycleKey: sync.cycleKey,
+        periodStart: sync.periodStart,
+        periodEnd: sync.periodEnd,
+        ...(sync.autoRenewing === null ? {} : { autoRenewing: sync.autoRenewing }),
+        ...(sync.invoiceId ? { invoiceId: sync.invoiceId } : {}),
+      }
+    : { siteId, active: false };
+  const response = await creditsFetch(env, '/credits/subscription', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  if (response.status === 409) {
+    const failure = await readFailure(response);
+    console.error('Subscription cycle conflict', failure.code ?? '');
+    throw new CreditGrantConflictError();
   }
-  return { remaining: Math.max(0, remaining) };
+  if (!response.ok) throwForFailure('subscription', await readFailure(response));
+  const parsed: unknown = await response.json().catch(() => undefined);
+  const account = readAccount(parsed, 'subscription');
+  const record = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  return {
+    ...account,
+    granted: typeof record.granted === 'number' ? record.granted : 0,
+    expired: typeof record.expired === 'number' ? record.expired : 0,
+    ended: record.ended === true,
+  };
 }
 
 export async function reserveCredits(

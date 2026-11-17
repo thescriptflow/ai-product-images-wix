@@ -247,7 +247,7 @@ export const ProductStudio = ({
             )}
           </Section>
 
-          <Section title="2. Edit this photo" hint="Remove and Replace background use 1 credit each, AI scene uses 2. When the balance runs out, buy more credits.">
+          <Section title="2. Edit this photo" hint="Remove and Replace background use 1 credit each, AI scene uses 2. When the balance runs out, choose a monthly plan under Plans & credits.">
             <Box direction="vertical" gap="SP4">
               <Section title="Remove background" hint="Gives a cut-out of the product with a transparent background.">
                 <Button

@@ -11,7 +11,7 @@ The project uses the current [Wix CLI](https://dev.wix.com/docs/wix-cli/guides/a
 - Product editor that saves name, visibility, and description through the matching catalog API.
 - Photo studio actions: **Remove background**, **Replace background**, **AI scene**, **Publish**, plus a before/after preview.
 - Batch **AI scene** on the products you select in the table.
-- Credits badge. The balance is read from the credits service for the current Wix site. Remove background and replace background cost 1 credit, AI scene costs 2, and publish costs 0. The mock provider does not charge. **Buy credits** opens Wix checkout for a one-time pack. Paid credits are granted on the credits service and do not expire.
+- Credits badge. The balance is read from the credits service for the current Wix site. Remove background and replace background cost 1 credit, AI scene costs 2, and publish costs 0. The mock provider does not charge. **Plans & credits** shows the current plan, credits left, and the refill date, and opens the Wix pricing page (`https://www.wix.com/apps/upgrade/<APP_ID>?appInstanceId=<INSTANCE_ID>`) to subscribe or change plan. Monthly plans (20, 60, 150 credits) refill every billing month; unused plan credits do not carry over. Free credits and credits from the earlier one-time packs never expire.
 - HTTP endpoint `POST /api/image-processing` and `GET /api/image-processing`.
 - Provider interface for `mock` (default), `fal`, `replicate`, and `photoroom`. `fal` calls Bria background removal and FLUX Kontext. The other providers still return a preview.
 
@@ -108,13 +108,11 @@ npx wix env pull
 | `IMAGE_PROVIDER` | `mock` (default), `fal`, `replicate`, or `photoroom` |
 | `FAL_KEY` or `FAL_API_KEY` | fal. Required when `IMAGE_PROVIDER=fal`. Server only. |
 | `FAL_SCENE_MODEL` | Optional. Empty uses `fal-ai/flux-pro/kontext`. Set `fal-ai/flux-kontext/dev` for the cheaper scene model. |
-| `CREDITS_API_URL` | Base URL of the credits service. The app calls `/credits/:siteId`, `/credits/reserve`, `/credits/refund`, and `/credits/grant`. Server only. |
+| `CREDITS_API_URL` | Base URL of the credits service. The app calls `/credits/:siteId`, `/credits/reserve`, `/credits/refund`, `/credits/grant` (legacy packs), and `/credits/subscription`. Server only. |
 | `CREDITS_API_KEY` | `x-api-key` for every credits path except `/health`. Server only. |
-| `CREDIT_PACK_20_PRODUCT_ID` | Product ID of the 20-credit Single plan. Checkout stays disabled until this is set. |
-| `CREDIT_PACK_60_PRODUCT_ID` | Product ID of the 60-credit Single plan. |
-| `CREDIT_PACK_150_PRODUCT_ID` | Product ID of the 150-credit Single plan. |
-| `CREDIT_PACKS` | Optional JSON array `[{"key":"20","productId":"..."}]` that overrides the three variables. |
-| `BILLING_TEST_CHECKOUT` | `true` opens the $0 Wix test checkout. Set `false` before charging the real prices. |
+| `PLAN_20_PRODUCT_ID` | Optional. Product ID of the 20-credit monthly plan. Default `20-credits`. Falls back to `CREDIT_PACK_20_PRODUCT_ID`. |
+| `PLAN_60_PRODUCT_ID` | Optional. Product ID of the 60-credit monthly plan. Default `60-credits`. Falls back to `CREDIT_PACK_60_PRODUCT_ID`. |
+| `PLAN_150_PRODUCT_ID` | Optional. Product ID of the 150-credit monthly plan. Default `150-credits`. Falls back to `CREDIT_PACK_150_PRODUCT_ID`. |
 | `REPLICATE_API_TOKEN` | Replicate (preview only in this build) |
 | `PHOTOROOM_API_KEY` | Photoroom (preview only in this build) |
 
@@ -162,5 +160,5 @@ src/image-processing/
 ## Roadmap
 
 1. **MVP (this repo).** Product list, editor, preview actions, before/after, batch scene preview, credits counter, and the provider interface.
-2. **Credits and billing.** Credit packs are sold through Wix app billing (Freemium plus three Single plans). The balance lives in the credits service. Plan names, prices, the external pricing page, and product IDs are set in the Wix app dashboard.
+2. **Credits and billing.** Freemium (Basic, 5 lifetime credits) plus three monthly Wix plans. Wix sends no event on a monthly renewal, so every plan event and every dashboard load reads Get App Instance (`packageName`, `billingCycle`, `timeStamp`, `autoRenewing`) and sends the current billing month to `POST /credits/subscription`. Months are counted from the purchase time. The credits service grants each month once, spends plan credits first, resets unused plan credits at the next month or on a plan change, and expires them after a cancelled plan's last paid month. Plan names, prices, the Wix pricing page, and product IDs are set in the Wix app dashboard.
 3. **More AI models.** Replicate and Photoroom still return a preview. Fashion-specific shots (on-model, ghost mannequin) are not wired yet.

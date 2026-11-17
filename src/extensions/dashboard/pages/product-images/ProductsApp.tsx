@@ -2,7 +2,7 @@ import React from 'react';
 import { withDashboard } from '@wix/patterns';
 import { WixPatternsProvider } from '@wix/patterns/provider';
 import { PatternsReactRoute, PatternsReactRouter } from '@wix/patterns/router';
-import { BuyCreditsPage } from './BuyCreditsPage';
+import { PlansPage } from './PlansPage';
 import { ProductsCollectionPage } from './ProductsCollectionPage';
 import { ProductEntityPage } from './ProductEntityPage';
 
@@ -17,7 +17,7 @@ export const ProductsApp = withDashboard(() => (
       <PatternsReactRoute
         type="other"
         path="/credits"
-        element={<BuyCreditsPage />}
+        element={<PlansPage />}
       />
       <PatternsReactRoute
         type="editEntity"

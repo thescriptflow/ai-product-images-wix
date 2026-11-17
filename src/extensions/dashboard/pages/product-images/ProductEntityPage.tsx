@@ -82,7 +82,7 @@ export const ProductEntityPage = () => {
         <EntityPage.MainContent>
           <Box align="right">
             <Button skin="standard" size="medium" onClick={() => navigate('/credits')}>
-              Buy credits
+              Plans &amp; credits
             </Button>
           </Box>
           <EntityPage.Card>

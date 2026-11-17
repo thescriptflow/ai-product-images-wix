@@ -2,22 +2,19 @@ import { appInstances, billing } from '@wix/app-management';
 import { auth } from '@wix/essentials';
 import { CreditGrantConflictError, grantCredits } from '../image-processing/credits-client';
 import { readEnv } from '../image-processing/service';
-import { packByProductId, type CreditPack } from './packs';
+import { planByProductId, toMillis, type CreditPlan } from './plans';
 
-export const APP_ID = 'daa76557-f2cc-4d12-8993-97f3a766f87a';
+/**
+ * Legacy one-time credit packs. The app now sells monthly plans (see
+ * subscription.ts). This file still grants any one-time pack a site bought
+ * before the switch, once, so those credits are kept.
+ */
 
 function isOneTime(cycle: string | null | undefined): boolean {
   return cycle === 'ONE_TIME';
 }
 
-function toMillis(value: Date | string | null | undefined): number | undefined {
-  if (!value) return undefined;
-  const date = value instanceof Date ? value : new Date(value);
-  const ms = date.getTime();
-  return Number.isFinite(ms) ? ms : undefined;
-}
-
-async function siteFromInstance() {
+export async function siteFromInstance() {
   const elevated = auth.elevate(appInstances.getAppInstance);
   const response = await elevated();
   return {
@@ -81,7 +78,7 @@ function skipPurchase(
   console.error(`Credit purchase skipped: ${describePurchase(purchase)}: ${reason}`);
 }
 
-async function grantPurchase(siteId: string, pack: CreditPack, purchaseId: string, detail: string): Promise<void> {
+async function grantPurchase(siteId: string, pack: CreditPlan, purchaseId: string, detail: string): Promise<void> {
   try {
     console.error(`Granting ${pack.credits} credits for ${detail}. purchaseId=${purchaseId}`);
     await grantCredits(siteId, pack.credits, purchaseId, readEnv());
@@ -140,7 +137,7 @@ export async function grantPaidPlan(input: {
     return;
   }
   const env = readEnv();
-  const pack = productId ? packByProductId(productId, env) : undefined;
+  const pack = planByProductId(productId, env);
   if (!pack) {
     console.error(
       `Credit purchase skipped: product ${productId || 'unknown'} cycle ${input.cycle || 'unknown'}: no credit pack is configured for this product.`,
@@ -177,31 +174,21 @@ export async function grantPaidPlan(input: {
   await grantPurchase(siteId, pack, purchaseId, grantDetail(purchase));
 }
 
-export async function reconcileLatestPurchase(siteId: string): Promise<void> {
+export type InstalledApp = Awaited<ReturnType<typeof siteFromInstance>>;
+
+export async function reconcileLatestPurchase(siteId: string, known?: InstalledApp): Promise<void> {
   const env = readEnv();
-  const [history, installed] = await Promise.all([purchaseHistory(), siteFromInstance()]);
+  const [history, installed] = await Promise.all([purchaseHistory(), known ?? siteFromInstance()]);
   if (installed.siteId && installed.siteId !== siteId) {
     console.error('Refusing to grant credits because the installation site does not match the caller.');
     return;
   }
-  const purchases = history.purchases ?? [];
-  const cycle = installed.billing?.billingCycle ?? 'none';
-  const instanceInvoice = installed.billing?.invoiceId?.trim() || 'absent';
-  const free = installed.isFree === undefined ? 'unknown' : String(installed.isFree);
-  console.error(
-    `Reconciling credit purchases from Wix history (${purchases.length}). App instance isFree=${free}, billingCycle=${cycle}, invoiceId=${instanceInvoice}.`,
-  );
-  if (purchases.length === 0) {
-    console.error('Credit purchase skipped: purchase history is empty.');
-    return;
-  }
+  const oneTime = (history.purchases ?? []).filter((purchase) => isOneTime(purchase.billingCycle));
+  if (oneTime.length === 0) return;
+  console.error(`Reconciling legacy one-time credit packs from Wix history (${oneTime.length}).`);
   const granted = new Set<string>();
-  for (const purchase of purchases) {
-    if (!isOneTime(purchase.billingCycle)) {
-      skipPurchase(purchase, 'not a one-time pack.');
-      continue;
-    }
-    const pack = purchase.productId ? packByProductId(purchase.productId, env) : undefined;
+  for (const purchase of oneTime) {
+    const pack = planByProductId(purchase.productId, env);
     if (!pack) {
       skipPurchase(purchase, 'no credit pack is configured for this product.');
       continue;
@@ -215,26 +202,4 @@ export async function reconcileLatestPurchase(siteId: string): Promise<void> {
     granted.add(purchaseId);
     await grantPurchase(siteId, pack, purchaseId, grantDetail(purchase));
   }
-}
-
-export function useTestCheckout(env: NodeJS.ProcessEnv): boolean {
-  return env.BILLING_TEST_CHECKOUT?.trim().toLowerCase() !== 'false';
-}
-
-export async function checkoutUrl(siteId: string, productId: string, env: NodeJS.ProcessEnv): Promise<string> {
-  const installed = await siteFromInstance();
-  if (!installed.instanceId) throw new Error('Could not identify the app installation.');
-  if (installed.siteId && installed.siteId !== siteId) {
-    throw new Error('This site does not match the app installation.');
-  }
-  const successUrl = `https://www.wix.com/my-account/app/${APP_ID}/${installed.instanceId}`;
-  const elevated = auth.elevate(billing.getUrl);
-  const response = await elevated(productId, {
-    billingCycle: 'ONE_TIME',
-    successUrl,
-    ...(useTestCheckout(env) ? { testCheckout: true } : {}),
-  });
-  const url = response.checkoutUrl?.trim() ?? '';
-  if (!url.startsWith('https://')) throw new Error('Wix did not return a checkout link.');
-  return url;
 }

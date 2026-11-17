@@ -16,7 +16,8 @@
     "release": "wix release",
     "generate": "wix generate",
     "skills": "wix skills",
-    "typecheck": "tsc --noEmit -p ."
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "dependencies": {
     "@wix/app-management": "^1.0.176",
