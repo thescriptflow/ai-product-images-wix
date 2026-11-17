@@ -1,17 +1,13 @@
 import { appInstances } from '@wix/app-management';
-import { grantPaidPlan } from '../../../../billing/purchases';
+import { handlePlanEvent } from '../../../../billing/plan-events';
 
 export default appInstances.onAppInstancePaidPlanChanged(async (event) => {
-  try {
-    await grantPaidPlan({
-      cycle: event.data.cycle,
-      vendorProductId: event.data.vendorProductId,
-      invoiceId: event.data.invoiceId,
-      operationTimeStamp: event.data.operationTimeStamp,
-      eventSiteId: event.metadata.accountInfo?.siteId,
-    });
-  } catch (error) {
-    console.error('Paid plan changed grant failed', error);
-    throw error;
-  }
+  await handlePlanEvent({
+    name: 'Paid plan changed',
+    cycle: event.data.cycle,
+    vendorProductId: event.data.vendorProductId,
+    invoiceId: event.data.invoiceId,
+    operationTimeStamp: event.data.operationTimeStamp,
+    eventSiteId: event.metadata.accountInfo?.siteId,
+  });
 });

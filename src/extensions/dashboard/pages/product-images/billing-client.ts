@@ -1,18 +1,36 @@
 import { httpClient } from '@wix/essentials';
 
-export interface CreditPackOffer {
+export interface CreditPlanOffer {
   key: '20' | '60' | '150';
   credits: number;
   name: string;
   priceLabel: string;
   benefits: string[];
-  checkoutEnabled: boolean;
-  disabledReason?: string;
+  productId: string;
+}
+
+export interface SubscriptionCredits {
+  plan: string;
+  credits: number;
+  periodStart: string | null;
+  periodEnd: string | null;
+  autoRenewing: boolean | null;
+}
+
+export interface CurrentPlan {
+  productId: string;
+  key: CreditPlanOffer['key'] | null;
+  name: string;
+  credits: number | null;
+  autoRenewing: boolean | null;
 }
 
 export interface BillingCatalog {
   balance: number | null;
-  packs: CreditPackOffer[];
+  subscription: SubscriptionCredits | null;
+  currentPlan: CurrentPlan | null;
+  plans: CreditPlanOffer[];
+  upgradeUrl: string | null;
 }
 
 function endpointUrl(): string {
@@ -37,26 +55,11 @@ export async function fetchBilling(): Promise<BillingCatalog> {
   return response.json() as Promise<BillingCatalog>;
 }
 
-export async function openCreditCheckout(pack: CreditPackOffer['key']): Promise<void> {
-  const tab = window.open('', '_blank');
-  try {
-    const response = await httpClient.fetchWithAuth(endpointUrl(), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ pack }),
-    });
-    if (!response.ok) throw new Error(await readError(response));
-    const body = (await response.json()) as { checkoutUrl?: string };
-    const checkoutUrl = body.checkoutUrl ?? '';
-    if (!checkoutUrl.startsWith('https://')) throw new Error('Wix did not return a checkout link.');
-    if (tab) {
-      tab.opener = null;
-      tab.location.href = checkoutUrl;
-      return;
-    }
-    window.location.assign(checkoutUrl);
-  } catch (error) {
-    tab?.close();
-    throw error;
+/** Opens the Wix pricing page for this app in a new tab, as Wix requires. */
+export function openPricingPage(url: string | null): void {
+  if (!url || !url.startsWith('https://www.wix.com/apps/upgrade/')) {
+    throw new Error('The Wix pricing page is unavailable right now. Please try again shortly.');
   }
+  const tab = window.open(url, '_blank', 'noopener,noreferrer');
+  if (!tab) window.location.assign(url);
 }

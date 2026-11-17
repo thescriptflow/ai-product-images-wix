@@ -147,7 +147,7 @@ export const ProductsCollectionPage = () => {
       <CollectionPage.Content>
         <Box align="right" paddingBottom="SP3">
           <Button skin="standard" size="medium" prefixIcon={<CreditCard />} onClick={() => navigate('/credits')}>
-            Buy credits
+            Plans &amp; credits
           </Button>
         </Box>
         <Table
